@@ -98,7 +98,7 @@ bool doc_open(const char *path, const char *rel)
 
 bool doc_dirty(void)
 {
-	return D.open && D.root && D.at >= 0 && D.saved != D.at;
+	return D.open && D.root && D.at >= 0 && (D.saved != D.at || D.live);
 }
 
 bool doc_editable(void)
@@ -114,6 +114,7 @@ cJSON *doc_steps(void)
 
 bool doc_save(char *why, size_t n)
 {
+	doc_settle();
 	if (!doc_editable() || D.at < 0) {
 		snprintf(why, n, "%s", D.readonly ? "the file is read-only here" : "no file open");
 		return false;
@@ -150,8 +151,17 @@ bool doc_save(char *why, size_t n)
 	return true;
 }
 
+void doc_settle(void)
+{
+	if (!D.live)
+		return;
+	D.live = false;
+	doc_changed(D.live_place);
+}
+
 void doc_changed(const char *place)
 {
+	D.live = false;
 	if (!D.root)
 		return;
 	char *text = scene_write(D.root);
@@ -173,7 +183,7 @@ static void reparse(void)
 
 bool doc_can_undo(void)
 {
-	return doc_editable() && D.at > 0;
+	return doc_editable() && (D.at > 0 || D.live);
 }
 
 bool doc_can_redo(void)
@@ -183,6 +193,7 @@ bool doc_can_redo(void)
 
 bool doc_undo(char *place, size_t n)
 {
+	doc_settle();
 	if (!doc_can_undo())
 		return false;
 	char where[256];
@@ -197,6 +208,7 @@ bool doc_undo(char *place, size_t n)
 
 bool doc_redo(char *place, size_t n)
 {
+	doc_settle();
 	if (!doc_can_redo())
 		return false;
 	D.at++;
@@ -313,4 +325,30 @@ bool place_list(const char *place, char *list_place, size_t n, int *index)
 	snprintf(list_place, n, "%.*s", (int)(b - place), place);
 	*index = atoi(b + 1);
 	return true;
+}
+
+void steps_each(cJSON *list, const char *lp, void (*fn)(cJSON *st, const char *place, void *ud), void *ud)
+{
+	int k = 0;
+	for (cJSON *st = cJSON_IsArray(list) ? list->child : NULL; st; st = st->next, k++) {
+		char place[256], sub[256];
+		place_join(place, sizeof place, lp, k);
+		fn(st, place, ud);
+		const char *kind = step_kind(st);
+		if (!kind)
+			continue;
+		if (!strcmp(kind, "if")) {
+			snprintf(sub, sizeof sub, "%s.then", place);
+			steps_each(cJSON_GetObjectItemCaseSensitive(st, "then"), sub, fn, ud);
+			snprintf(sub, sizeof sub, "%s.else", place);
+			steps_each(cJSON_GetObjectItemCaseSensitive(st, "else"), sub, fn, ud);
+		} else if (!strcmp(kind, "choice")) {
+			cJSON *rows = cJSON_GetObjectItemCaseSensitive(st, "choice");
+			int r = 0;
+			for (cJSON *row = cJSON_IsArray(rows) ? rows->child : NULL; row; row = row->next, r++) {
+				snprintf(sub, sizeof sub, "%s.choice[%d].steps", place, r);
+				steps_each(cJSON_IsObject(row) ? cJSON_GetObjectItemCaseSensitive(row, "steps") : NULL, sub, fn, ud);
+			}
+		}
+	}
 }

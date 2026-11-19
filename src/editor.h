@@ -24,6 +24,12 @@
 #define SCENE_FORMAT 1
 #define SCENE_SCHEMA "https://rq-modding.github.io/rq-modding-docs/schemas/scene.schema.json"
 
+/* Dear ImGui's colour macros, which cimgui's C header leaves out. */
+#ifndef IM_COL32
+#define IM_COL32(r, g, b, a) (((ImU32)(a) << 24) | ((ImU32)(b) << 16) | ((ImU32)(g) << 8) | (ImU32)(r))
+#define IM_COL32_WHITE IM_COL32(255, 255, 255, 255)
+#endif
+
 /* A size in the layout at the display's scale (1 for --shot unless --scale says otherwise). */
 #define S(x) ((float)(x) * CORE.scale)
 
@@ -130,6 +136,83 @@ int file_find(const char *rel);
 bool file_stat(const char *path, long long *mtime, long long *size);
 bool scene_name_ok(const char *name);            /* letters, digits, - and _ */
 
+/* ---- the game's pictures, music and names (media.c) ---- */
+
+enum { PIC_LOADING = 1, PIC_READY = 2, PIC_FAILED = 3 };
+
+struct picture {
+	unsigned tex;
+	int w, h;
+	int state;      /* PIC_* */
+};
+
+enum { SOUND_MUSIC, SOUND_EFFECT };
+
+void media_init(bool thumbs);          /* after game_open; thumbs: start the thumbnail thread */
+void media_frame(void);                /* once a frame */
+bool media_idle(void);                 /* nothing waits to be read (for --shot) */
+void media_set_mod(const char *dir);   /* where a picture path of the scene files starts */
+const char *media_mod_dir(void);
+/* A picture value of a scene file (a CG number, or a path in the mod's folder), whole, for the
+ * stage; PIC_LOADING for a frame or two while it is read. */
+const struct picture *media_picture(const cJSON *v);
+struct thumb *media_thumb(int no);     /* a CG's thumbnail, made on Rance Browser's thread */
+bool media_cg_exists(int no);
+const char *media_face_owner(int face);   /* rq.ids' character for a face CG, or NULL */
+const char *media_face_name(int face);    /* the plate's name for it: the first word of that */
+const char *media_music_name(int no);     /* rq.ids.music's name, or NULL */
+bool media_can_play(int kind, int no);
+bool media_playing(int kind, int no);
+void media_play(int kind, int no);        /* plays, or stops when it is playing */
+void media_stop(void);
+
+/* ---- the stage sketch (stage.c) ---- */
+
+enum { L_WALL, L_MASK, L_BG, L_PORTRAIT, L_MINI, L_CG, L_COUNT };
+
+/* The scene as the game shows it at a step: the pictures on each layer, the screen, the line in the
+ * message box and, when the step is a choice, its rows. Values point into the file's JSON. */
+struct stage {
+	const cJSON *layer[L_COUNT];
+	int screen;              /* 0, 'b' black, 'w' white */
+	const cJSON *line;       /* the say, think or narrate on show */
+	const cJSON *choice;     /* the selected step, when it is a choice */
+	const cJSON *cast;
+	const char *line_name;   /* a name plate given by the caller (the cast tab), or NULL */
+};
+
+void stage_walk(const cJSON *root, const char *place, struct stage *s);
+/* Draws the sketch at the cursor, w wide (4:3), the line's page `page` (from 0). */
+void stage_draw(const struct stage *s, int page, float w);
+const cJSON *line_text(const cJSON *line);            /* text, or narrate's value */
+int line_pages(const cJSON *line);                     /* 0 when it is not a line */
+const char *line_page(const cJSON *line, int page);   /* NULL past the end */
+/* A page as the game lays it out in its box: how many lines it takes (a page holds 4). */
+int page_lines(const char *page);
+/* The plate a line shows: its name, else the cast's, else the game's character for the face (*game
+ * true), else NULL. */
+const char *line_plate(const cJSON *line, const cJSON *cast, bool *game);
+/* The face a line shows (a number or a path), from the cast when it names one; NULL for none. */
+const cJSON *line_face(const cJSON *line, const cJSON *cast);
+/* The box's text at the game's 1024 by 768: 32 pixels to the em in the game's font, which Dear
+ * ImGui calls 43.6 (it sizes a font by its whole height), on lines 36 pixels apart. */
+#define BOX_TEXT_SIZE 43.6f
+#define BOX_LINE_H 36.0f
+
+/* ---- the selected step's fields (fields.c) ---- */
+
+void fields_frame(void);   /* once a frame: typing that left its field becomes a step to undo */
+/* The fields of a step by its kind; they change the step in place. place: its place in the file. */
+void fields_step(cJSON *st, const char *place, bool readonly);
+extern int fields_page;    /* the page of a line the stage shows (the page being typed in) */
+/* A cast entry's fields: its name in the file (renamed in every line), face and name plate. Returns
+ * the entry's name after it (another when it was renamed). */
+const char *fields_cast(const char *key, bool readonly);
+/* The lines that name a cast entry, and the first one's place. */
+int cast_uses(const char *key, char *first, size_t n);
+/* A picture value (a CG number or a mod picture) in a box, cropped to fill it; top: keep its top. */
+void draw_picture_small(ImDrawList *dl, const cJSON *v, V2 a, V2 b, bool top);
+
 /* ---- the open file (doc.c) ---- */
 
 struct snap {
@@ -151,6 +234,8 @@ struct doc {
 	struct snap *snaps;
 	int nsnaps, at;
 	int saved;         /* the snapshot on disk, or -1 */
+	bool live;         /* a field changed D.root as it was typed: not yet a step to undo */
+	char live_place[256];
 };
 
 extern struct doc D;
@@ -162,6 +247,7 @@ bool doc_save(char *why, size_t n);
 bool doc_dirty(void);
 bool doc_editable(void);
 void doc_changed(const char *place);    /* after a change to D.root: a step to undo */
+void doc_settle(void);                  /* a field's typing (D.live) made a step to undo */
 bool doc_undo(char *place, size_t n);   /* the place to select after it */
 bool doc_redo(char *place, size_t n);
 bool doc_can_undo(void);
@@ -174,6 +260,8 @@ cJSON *doc_steps(void);
 cJSON *place_find(const cJSON *root, const char *place, cJSON **list, int *index);
 void place_join(char *out, size_t n, const char *list_place, int index);   /* list_place + [index] */
 bool place_list(const char *place, char *list_place, size_t n, int *index);   /* the reverse */
+/* Every step of a list and of the lists under it, in order, with its place. */
+void steps_each(cJSON *list, const char *lp, void (*fn)(cJSON *st, const char *place, void *ud), void *ud);
 
 /* ---- the window (ui.c) ---- */
 
@@ -198,8 +286,12 @@ void ui_title(char *out, size_t n);
 bool ui_wants_quit(void);   /* the window's close: asks first when there are unsaved changes */
 /* An action as the window's buttons do it, for --shot --do: select=PLACE, add=KIND, apply=JSON,
  * type=JSON, copy, delete, up, down, undo, redo, tab=steps|cast, modal=unsaved|layout|changed|new,
- * fold. False when it is unknown or did nothing it could check. */
+ * fold, page=N (a line's page on the stage), json (the step's JSON open), cast=NAME (picked in Cast
+ * and file), castadd, move=FROM|LIST|INDEX (a step dropped into a list before its step INDEX). False when it is unknown or did nothing it could check. */
 bool ui_do(const char *action);
+int ui_label_count(void);           /* the open file's labels */
+const char *ui_label_name(int i);
+const char *ui_mod_id(void);        /* the open mod's id, or "mod" */
 
 /* ---- Windows (win.c) ---- */
 

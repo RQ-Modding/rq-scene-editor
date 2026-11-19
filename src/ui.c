@@ -47,6 +47,8 @@ static char (*vis)[256];
 static int nvis, capvis;
 
 static bool problems_folded;
+static int want_mid_tab = -1;   /* 0 Steps, 1 Cast and file: opened next frame */
+static bool cast_tab_shown;     /* the middle shows Cast and file: the right side shows the cast's pick */
 static int last_problem_count;
 
 static char new_name[80];
@@ -80,6 +82,12 @@ static const char *fit(ImFont *f, float size, const char *s, float w, char *out,
 	memcpy(out, s, k);
 	snprintf(out + k, n - k, "%s", ell);
 	return out;
+}
+
+/* The content's right edge in the window's own coordinates, for igSameLine. */
+static float content_right(void)
+{
+	return igGetCursorPosX() + igGetContentRegionAvail().x;
 }
 
 static void draw_text(ImDrawList *dl, ImFont *f, float size, V2 pos, ImU32 c, const char *s, float max_x)
@@ -248,6 +256,22 @@ static const char *label_place(const char *name)
 	return NULL;
 }
 
+int ui_label_count(void)
+{
+	return nlabels;
+}
+
+const char *ui_label_name(int i)
+{
+	return i >= 0 && i < nlabels ? labels[i].name : "";
+}
+
+const char *ui_mod_id(void)
+{
+	struct mod *m = mod_now();
+	return m ? m->id : "mod";
+}
+
 /* ---- files and mods ---- */
 
 static void open_file(const char *rel)
@@ -274,6 +298,7 @@ static void open_mod(int i, const char *file)
 {
 	cur_mod = i;
 	struct mod *m = mod_now();
+	media_set_mod(m ? m->dir : NULL);
 	files_scan(m);
 	next_scan = igGetTime() + 2;
 	int f = file ? file_find(file) : -1;
@@ -865,13 +890,215 @@ static float tag_pill(ImDrawList *dl, V2 p, const char *label, int group, float 
 	return w;
 }
 
+static bool is_kind(const char *kind, const char *a)
+{
+	return kind && !strcmp(kind, a);
+}
+
+static bool picture_kind(const char *kind)
+{
+	return is_kind(kind, "background") || is_kind(kind, "wallpaper") || is_kind(kind, "mask_wallpaper")
+	    || is_kind(kind, "portrait") || is_kind(kind, "mini") || is_kind(kind, "cg") || is_kind(kind, "background_in");
+}
+
+/* A pill after a line's text: "+1 page". */
+static float small_pill(ImDrawList *dl, V2 p, const char *label, float h, ImU32 ink)
+{
+	float size = fs(12.5f);
+	float tw = text_w(F_UI, size, label);
+	ImDrawList_AddRect(dl, p, v2(p.x + tw + S(14), p.y + h), col_a(C_FAINT, 0.7f), h / 2, S(1), 0);
+	ImDrawList_AddText_FontPtr(dl, F_UI, size, v2(p.x + S(7), p.y + (h - size) / 2 - S(0.5f)), ink, label, NULL, 0, NULL);
+	return tw + S(14);
+}
+
+/* A page on one line of the list in the game's font, its line breaks as ↵ in the window's (the
+ * game's font has no such sign), cut with … at max_x. Returns where it ends. */
+static float draw_page_line(ImDrawList *dl, V2 pos, float gsize, ImU32 c, const char *s, float max_x)
+{
+	const char *mark = " \xE2\x86\xB5 ";
+	float usize = gsize * 0.85f, mw = text_w(F_UI, usize, mark), x = pos.x;
+	char seg[1200], cut[1200];
+	for (const char *p = s; *p;) {
+		const char *nl = strchr(p, '\n');
+		size_t len = nl ? (size_t)(nl - p) : strlen(p);
+		snprintf(seg, sizeof seg, "%.*s", (int)(len < sizeof seg ? len : sizeof seg - 1), p);
+		const char *shown = fit(F_GAME, gsize, seg, max_x - x, cut, sizeof cut);
+		ImDrawList_AddText_FontPtr(dl, F_GAME, gsize, v2(x, pos.y), c, shown, NULL, 0, NULL);
+		x += text_w(F_GAME, gsize, shown);
+		if (shown != seg || !nl)
+			return x;
+		if (x + mw + text_w(F_GAME, gsize, "\xE2\x80\xA6") > max_x) {
+			ImDrawList_AddText_FontPtr(dl, F_GAME, gsize, v2(x, pos.y), c, "\xE2\x80\xA6", NULL, 0, NULL);
+			return x + text_w(F_GAME, gsize, "\xE2\x80\xA6");
+		}
+		ImDrawList_AddText_FontPtr(dl, F_UI, usize, v2(x, pos.y + (gsize - usize) * 0.55f), col(C_FAINT), mark, NULL, 0, NULL);
+		x += mw;
+		p = nl + 1;
+	}
+	return x;
+}
+
+/* A page on one line of the list: its line breaks as ↵ (in out). */
+static const char *one_line(const char *s, char *out, size_t n)
+{
+	size_t o = 0;
+	for (const char *p = s; *p && o + 6 < n; p++) {
+		if (*p == '\n') {
+			memcpy(out + o, " \xE2\x86\xB5 ", 5);
+			o += 5;
+		} else {
+			out[o++] = *p;
+		}
+	}
+	out[o] = 0;
+	return out;
+}
+
+/* A round play button over a row's selectable (right after it, on its line); true when pressed. */
+static bool row_play(ImDrawList *dl, V2 c, float r, bool playing, const char *id)
+{
+	igSameLine(0, 0);
+	igSetCursorScreenPos(v2(c.x - r, c.y - r));
+	bool pressed = igInvisibleButton(id, v2(r * 2, r * 2), 0);
+	bool hot = igIsItemHovered(0);
+	ImDrawList_AddCircleFilled(dl, c, r, hot ? col(C_BTN_HI) : col(C_BTN), 20);
+	ImU32 ink = playing ? col(C_PLAY) : col(C_TEXT);
+	if (playing) {
+		float s = r * 0.42f;
+		ImDrawList_AddRectFilled(dl, v2(c.x - s, c.y - s), v2(c.x + s, c.y + s), ink, S(1), 0);
+	} else {
+		float s = r * 0.48f;
+		ImDrawList_AddTriangleFilled(dl, v2(c.x - s * 0.7f, c.y - s), v2(c.x - s * 0.7f, c.y + s), v2(c.x + s, c.y), ink);
+	}
+	if (hot)
+		igSetTooltip(playing ? "Stop" : "Play it here (the game's file, through this computer's sound)");
+	return pressed;
+}
+
+/* ---- moving a step by dragging it ---- */
+
+#define DRAG_STEP "RQSE_STEP"
+
+/* A move asked by a drop, done after the list is drawn (the list is walked while drawing). */
+static struct {
+	bool on;
+	char from[256];      /* the step's place */
+	char list[256];      /* the list it goes into */
+	int index;           /* before this step of that list */
+} move_req;
+
+/* A list by its place: steps, steps[2].then, steps[2].else, steps[2].choice[1].steps. */
+static cJSON *list_find(const char *lp)
+{
+	if (!strcmp(lp, "steps"))
+		return doc_steps();
+	char head[256];
+	size_t n = strlen(lp);
+	const char *tails[] = { ".then", ".else" };
+	for (int i = 0; i < 2; i++) {
+		size_t k = strlen(tails[i]);
+		if (n > k && !strcmp(lp + n - k, tails[i])) {
+			snprintf(head, sizeof head, "%.*s", (int)(n - k), lp);
+			cJSON *l = cJSON_GetObjectItemCaseSensitive(place_find(D.root, head, NULL, NULL), tails[i] + 1);
+			return cJSON_IsArray(l) ? l : NULL;
+		}
+	}
+	const char *c = strstr(lp, ".choice[");
+	const char *last = NULL;
+	while (c) {
+		last = c;
+		c = strstr(c + 1, ".choice[");
+	}
+	if (!last || n < 6 || strcmp(lp + n - 6, ".steps"))
+		return NULL;
+	snprintf(head, sizeof head, "%.*s", (int)(last - lp), lp);
+	cJSON *rows = cJSON_GetObjectItemCaseSensitive(place_find(D.root, head, NULL, NULL), "choice");
+	cJSON *row = cJSON_IsArray(rows) ? cJSON_GetArrayItem(rows, atoi(last + 8)) : NULL;
+	cJSON *l = cJSON_IsObject(row) ? cJSON_GetObjectItemCaseSensitive(row, "steps") : NULL;
+	return cJSON_IsArray(l) ? l : NULL;
+}
+
+struct find_ptr { const cJSON *want; char place[256]; };
+
+static void find_ptr_fn(cJSON *st, const char *place, void *ud)
+{
+	struct find_ptr *f = ud;
+	if (st == f->want)
+		snprintf(f->place, sizeof f->place, "%s", place);
+}
+
+/* The step at `from` into list `lp` before its step `index` (at its end past the last). */
+static bool op_move_to(const char *from, const char *lp, int index)
+{
+	cJSON *src_list, *dst = list_find(lp);
+	int si;
+	cJSON *st = place_find(D.root, from, &src_list, &si);
+	size_t fl = strlen(from);
+	if (!doc_editable() || !st || !dst)
+		return false;
+	/* Not into its own branches. */
+	if (!strncmp(lp, from, fl) && lp[fl] == '.') {
+		ui_status("The step stays: a step does not go into its own branches");
+		return false;
+	}
+	cJSON *before = cJSON_GetArrayItem(dst, index);
+	if (before == st)
+		return false;
+	cJSON_DetachItemFromArray(src_list, si);
+	int at = 0;
+	cJSON *c = dst->child;
+	while (c && c != before) {
+		c = c->next;
+		at++;
+	}
+	cJSON_InsertItemInArray(dst, at, st);
+	struct find_ptr f = { st, "" };
+	steps_each(doc_steps(), "steps", find_ptr_fn, &f);
+	changed(f.place);
+	select_place(f.place, true);
+	return true;
+}
+
+static void drop_line(float x0, float x1, float y)
+{
+	ImDrawList *dl = igGetWindowDrawList();
+	ImDrawList_AddLine(dl, v2(x0, y), v2(x1, y), col(C_ACCENT), S(2.5f));
+	ImDrawList_AddCircleFilled(dl, v2(x0, y), S(4), col(C_ACCENT), 12);
+}
+
+/* A row as a target: the dragged step goes before or after it, by the mouse's half of the row. */
+static void step_drop_target(const char *place, V2 a, V2 b, float x0)
+{
+	if (!igBeginDragDropTarget())
+		return;
+	const ImGuiPayload *pl = igAcceptDragDropPayload(DRAG_STEP, ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+	if (pl) {
+		bool after = igGetMousePos().y > (a.y + b.y) / 2;
+		drop_line(x0, b.x, after ? b.y + S(1) : a.y - S(1));
+		if (pl->Delivery) {
+			char lp[256];
+			int k;
+			if (place_list(place, lp, sizeof lp, &k)) {
+				move_req.on = true;
+				snprintf(move_req.from, sizeof move_req.from, "%s", (const char *)pl->Data);
+				snprintf(move_req.list, sizeof move_req.list, "%s", lp);
+				move_req.index = after ? k + 1 : k;
+			}
+		}
+	}
+	igEndDragDropTarget();
+}
+
+static bool want_add_menu;   /* the "+" on a row: the add menu opens next frame */
+
 static void step_row(cJSON *st, const char *place, int index, int depth, const cJSON *cast)
 {
 	igPushID_Str(place);
 	bool sel = !strcmp(UI.sel, place);
-	float h = S(32);
+	float h = S(40);
 	V2 p = igGetCursorScreenPos();
 	float w = igGetContentRegionAvail().x;
+	igSetNextItemAllowOverlap();
 	if (igSelectable_Bool("##row", sel, ImGuiSelectableFlags_AllowDoubleClick, v2(w, h))) {
 		select_place(place, false);
 		const char *kind = step_kind(st);
@@ -882,6 +1109,16 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 				select_place(to, true);
 		}
 	}
+	if (doc_editable() && igBeginDragDropSource(0)) {
+		igSetDragDropPayload(DRAG_STEP, place, strlen(place) + 1, 0);
+		char *sum = step_summary(st, cast);
+		char cut[200];
+		igTextUnformatted(fit(F_UI, igGetFontSize(), sum, S(360), cut, sizeof cut), NULL);
+		free(sum);
+		igEndDragDropSource();
+	}
+	if (doc_editable())
+		step_drop_target(place, p, v2(p.x + w, p.y + h), p.x + S(42) + (float)depth * S(22));
 	if (sel && UI.scroll_to_sel) {
 		igSetScrollHereY(0.4f);
 		UI.scroll_to_sel = false;
@@ -901,24 +1138,134 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 	float x = p.x + S(42) + (float)depth * S(22);
 	const char *kind = step_kind(st);
 	const struct kind_info *k = kind ? kind_find(kind) : NULL;
-	tag_pill(dl, v2(x, p.y + S(7)), k ? k->tag : "?", k ? k->group : TAG_BAD, h - S(14));
+	tag_pill(dl, v2(x, p.y + S(11)), k ? k->tag : "?", k ? k->group : TAG_BAD, h - S(22));
 	x += S(80);
-	char *sum = step_summary(st, cast);
-	ImU32 tc = col(C_TEXT);
-	if (!k)
-		tc = col(C_BAD);
-	else if (k->group == TAG_NOTE)
-		tc = col(C_T_NOTE);
-	else if (!strcmp(k->key, "label") || !strcmp(k->key, "goto"))
-		tc = col(C_T_FLOW);
-	float size = igGetFontSize();
-	draw_text(dl, F_UI, size, v2(x, p.y + (h - size) / 2), tc, sum, b.x - S(10));
-	free(sum);
+	float size = igGetFontSize(), right = b.x - S(10);
+	float ty = p.y + (h - size) / 2;
+	const cJSON *v = kind ? cJSON_GetObjectItemCaseSensitive(st, kind) : NULL;
+	char buf[1200];
+	if (is_kind(kind, "say") || is_kind(kind, "think") || is_kind(kind, "narrate")) {
+		bool narr = is_kind(kind, "narrate");
+		if (!narr) {
+			/* The face, then the name plate. */
+			const cJSON *face = line_face(st, cast);
+			V2 fa = v2(x, p.y + S(5)), fb = v2(x + S(27), p.y + h - S(5));
+			if (face)
+				draw_picture_small(dl, face, fa, fb, true);
+			else
+				ImDrawList_AddRect(dl, fa, fb, col(C_LINE), S(3), 0, S(1));
+			x += S(36);
+			bool game = false;
+			const char *who = line_plate(st, cast, &game);
+			if (!who && cJSON_IsString(v))
+				who = v->valuestring;
+			char tmp[64];
+			if (!who && cJSON_IsNumber(v)) {
+				snprintf(tmp, sizeof tmp, "face %d", (int)v->valuedouble);
+				who = tmp;
+			}
+			draw_text(dl, F_UI, size, v2(x, ty), col(game ? C_FAINT : C_DIM), who ? who : "", x + S(90));
+			x += S(98);
+		}
+		const cJSON *text = line_text(st);
+		int pages = line_pages(st);
+		const char *first = line_page(st, 0);
+		if (first) {
+			char pill[32] = "";
+			float pw = 0;
+			if (pages > 1) {
+				snprintf(pill, sizeof pill, "+%d page%s", pages - 1, pages == 2 ? "" : "s");
+				pw = text_w(F_UI, fs(12.5f), pill) + S(24);
+			}
+			float gsize = size * 1.06f;
+			float end = draw_page_line(dl, v2(x, p.y + (h - gsize) / 2), gsize, col(C_TEXT), first, right - pw);
+			if (pages > 1)
+				small_pill(dl, v2(end + S(10), p.y + S(11)), pill, h - S(22), col(C_DIM));
+		} else {
+			char *j = text ? json_inline(text) : NULL;
+			draw_text(dl, F_UI, size, v2(x, ty), col(text ? C_BAD : C_FAINT), j ? j : "no text", right);
+			free(j);
+		}
+	} else if (picture_kind(kind) || is_kind(kind, "set")) {
+		/* A small copy of the picture, then the sentence. */
+		const cJSON *pic = v;
+		if (is_kind(kind, "set")) {
+			static const char *const order[] = { "background", "cg", "wallpaper", "portrait", "mini" };
+			pic = NULL;
+			for (int i = 0; i < 5 && !pic; i++) {
+				const cJSON *c = cJSON_GetObjectItemCaseSensitive(v, order[i]);
+				if ((cJSON_IsNumber(c) && c->valuedouble > 0) || cJSON_IsString(c))
+					pic = c;
+			}
+		}
+		bool shown = (cJSON_IsNumber(pic) && pic->valuedouble > 0) || cJSON_IsString(pic);
+		if (shown) {
+			bool face = is_kind(kind, "portrait") || is_kind(kind, "mini");
+			draw_picture_small(dl, pic, v2(x, p.y + S(6)), v2(x + S(50), p.y + h - S(6)), face);
+			x += S(60);
+		}
+		char *sum = step_summary(st, cast);
+		draw_text(dl, F_UI, size, v2(x, ty), col(C_TEXT), sum, right);
+		free(sum);
+	} else if (is_kind(kind, "music") || is_kind(kind, "sound") || is_kind(kind, "jingle")) {
+		int what = is_kind(kind, "music") ? SOUND_MUSIC : SOUND_EFFECT;
+		int no = cJSON_IsNumber(v) ? (int)v->valuedouble : -1;
+		if (no >= 0 && media_can_play(what, no)) {
+			if (row_play(dl, v2(x + S(11), p.y + h / 2), S(11), media_playing(what, no), "##play"))
+				media_play(what, no);
+			x += S(30);
+		}
+		const char *name = what == SOUND_MUSIC && no >= 0 ? media_music_name(no) : NULL;
+		if (name)
+			snprintf(buf, sizeof buf, "%d \xC2\xB7 %s", no, name);
+		else {
+			char *sum = step_summary(st, cast);
+			snprintf(buf, sizeof buf, "%s", sum);
+			free(sum);
+		}
+		draw_text(dl, F_UI, size, v2(x, ty), col(C_TEXT), buf, right);
+	} else {
+		char *sum = step_summary(st, cast);
+		ImU32 tc = col(C_TEXT);
+		ImFont *f = F_UI;
+		if (!k)
+			tc = col(C_BAD);
+		else if (k->group == TAG_NOTE) {
+			tc = col(C_T_NOTE);
+			one_line(sum, buf, sizeof buf);
+			free(sum);
+			sum = xstrdup(buf);
+		} else if (!strcmp(k->key, "label") || !strcmp(k->key, "goto"))
+			tc = col(C_T_FLOW);
+		draw_text(dl, f, size, v2(x, ty), tc, sum, right);
+		free(sum);
+	}
+	/* "+" at the row's foot while it is hovered: a new step after it. */
+	if (doc_editable() && !igIsDragDropActive() && igIsWindowHovered(0) && igIsMouseHoveringRect(p, b, false)) {
+		float r = S(8);
+		V2 c = v2(p.x + S(4) + r, b.y - r - S(1));
+		igSameLine(0, 0);
+		igSetCursorScreenPos(v2(c.x - r, c.y - r));
+		if (igInvisibleButton("##plus", v2(r * 2, r * 2), 0)) {
+			select_place(place, false);
+			want_add_menu = true;
+		}
+		bool hot = igIsItemHovered(0);
+		ImDrawList_AddCircleFilled(dl, c, r, hot ? col(C_ACCENT_HI) : col_a(C_ACCENT, 0.75f), 16);
+		ImU32 ink = col(C_ACCENT_INK);
+		float s = r * 0.5f;
+		ImDrawList_AddLine(dl, v2(c.x - s, c.y), v2(c.x + s, c.y), ink, S(1.6f));
+		ImDrawList_AddLine(dl, v2(c.x, c.y - s), v2(c.x, c.y + s), ink, S(1.6f));
+		if (hot)
+			igSetTooltip("A new step after this one");
+	}
 	igPopID();
 }
 
-/* A branch's heading: then, else, or a choice's row. Returns whether its steps show. */
-static bool branch_row(const char *id, int depth, const char *label, const char *hint, ImU32 label_col, bool has_steps)
+/* A branch's heading: then, else, or a choice's row. Returns whether its steps show. A step
+ * dropped on it goes first in its list (list: the list's place, or NULL when it has none). */
+static bool branch_row(const char *id, int depth, const char *label, const char *hint, ImU32 label_col, bool has_steps,
+                       const char *list)
 {
 	igPushID_Str(id);
 	ImGuiStorage *store = igGetStateStorage();
@@ -930,6 +1277,19 @@ static bool branch_row(const char *id, int depth, const char *label, const char 
 	if (igSelectable_Bool("##branch", false, 0, v2(w, h)) && has_steps) {
 		open = !open;
 		ImGuiStorage_SetBool(store, key, open);
+	}
+	if (list && doc_editable() && igBeginDragDropTarget()) {
+		const ImGuiPayload *pl = igAcceptDragDropPayload(DRAG_STEP, ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+		if (pl) {
+			drop_line(p.x + S(42) + (float)(depth + 1) * S(22), p.x + w, p.y + h + S(1));
+			if (pl->Delivery) {
+				move_req.on = true;
+				snprintf(move_req.from, sizeof move_req.from, "%s", (const char *)pl->Data);
+				snprintf(move_req.list, sizeof move_req.list, "%s", list);
+				move_req.index = 0;
+			}
+		}
+		igEndDragDropTarget();
 	}
 	ImDrawList *dl = igGetWindowDrawList();
 	float size = igGetFontSize(), y = p.y + (h - size) / 2;
@@ -966,7 +1326,7 @@ static void draw_steps(cJSON *list, const char *lp, int depth, const cJSON *cast
 				snprintf(sub, sizeof sub, "%s.%s", place, br[i]);
 				int n = cJSON_GetArraySize(l);
 				snprintf(hint, sizeof hint, "%d step%s", n, n == 1 ? "" : "s");
-				if (branch_row(sub, depth + 1, br[i], hint, col(C_TEXT), n > 0))
+				if (branch_row(sub, depth + 1, br[i], hint, col(C_TEXT), n > 0, sub))
 					draw_steps(l, sub, depth + 2, cast);
 			}
 		} else if (!strcmp(kind, "choice")) {
@@ -1010,9 +1370,9 @@ static void draw_steps(cJSON *list, const char *lp, int depth, const cJSON *cast
 					snprintf(label, sizeof label, "Row %d  %s", r + 1, j);
 					free(j);
 				}
-				if (branch_row(rp, depth + 1, label, hint, col(C_TEXT), steps && steps->child)) {
-					char sp[256];
-					snprintf(sp, sizeof sp, "%s.steps", rp);
+				char sp[256];
+				snprintf(sp, sizeof sp, "%s.steps", rp);
+				if (branch_row(rp, depth + 1, label, hint, col(C_TEXT), steps && steps->child, steps ? sp : NULL)) {
 					draw_steps(steps, sp, depth + 2, cast);
 				}
 			}
@@ -1041,8 +1401,9 @@ static void steps_toolbar(void)
 {
 	bool can = doc_editable();
 	igBeginDisabled(!can);
-	if (igButton("+ Add step  \xE2\x96\xBE", v2(0, 0)))
+	if (igButton("+ Add step  \xE2\x96\xBE", v2(0, 0)) || want_add_menu)
 		igOpenPopup_Str("##add", 0);
+	want_add_menu = false;
 	igSetItemTooltip("A new step after the selected one");
 	if (igBeginPopup("##add", 0)) {
 		add_menu();
@@ -1085,48 +1446,161 @@ static void cant_read_box(void)
 	igPopTextWrapPos();
 }
 
+static char cast_sel[128];   /* the cast entry shown on the right */
+
+static void cast_add(void)
+{
+	if (!doc_editable())
+		return;
+	cJSON *cast = cJSON_GetObjectItemCaseSensitive(D.root, "cast");
+	if (!cJSON_IsObject(cast)) {
+		cast = cJSON_CreateObject();
+		/* After format and $schema, before the steps: as the editor writes a file. */
+		cJSON_AddItemToObject(D.root, "cast", cast);
+	}
+	char key[64] = "someone";
+	for (int i = 2; cJSON_GetObjectItemCaseSensitive(cast, key); i++)
+		snprintf(key, sizeof key, "someone%d", i);
+	cJSON *e = cJSON_CreateObject();
+	cJSON_AddNumberToObject(e, "face", 2005);
+	cJSON_AddItemToObject(cast, key, e);
+	doc_changed("");
+	snprintf(cast_sel, sizeof cast_sel, "%s", key);
+}
+
+static void cast_remove(const char *key)
+{
+	cJSON *cast = cJSON_GetObjectItemCaseSensitive(D.root, "cast");
+	if (!doc_editable() || !cJSON_GetObjectItemCaseSensitive(cast, key))
+		return;
+	cJSON_DeleteItemFromObjectCaseSensitive(cast, key);
+	if (!cast->child)
+		cJSON_DeleteItemFromObjectCaseSensitive(D.root, "cast");
+	doc_changed("");
+	cast_sel[0] = 0;
+}
+
 static void cast_tab(void)
 {
 	const cJSON *cast = cJSON_GetObjectItemCaseSensitive(D.root, "cast");
+	bool can = doc_editable();
 	section("Cast", "names the lines use for a face");
+	if (cJSON_IsObject(cast) && cast->child && !cJSON_GetObjectItemCaseSensitive(cast, cast_sel))
+		snprintf(cast_sel, sizeof cast_sel, "%s", cast->child->string);
 	if (!cJSON_IsObject(cast) || !cast->child) {
 		igTextColored(colv(C_FAINT), "No cast: the lines name their faces by number.");
-	} else if (igBeginTable("##cast", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH, v2(0, 0), 0)) {
-		igTableSetupColumn("Name in the file", 0, 0, 0);
-		igTableSetupColumn("Face", 0, 0, 0);
-		igTableSetupColumn("Name plate", 0, 0, 0);
+	} else if (igBeginTable("##cast", 4, ImGuiTableFlags_BordersInnerH, v2(0, 0), 0)) {
+		igTableSetupColumn("Name in the file", ImGuiTableColumnFlags_WidthStretch, 1.1f, 0);
+		igTableSetupColumn("Face", ImGuiTableColumnFlags_WidthStretch, 1, 0);
+		igTableSetupColumn("Name plate", ImGuiTableColumnFlags_WidthStretch, 1.4f, 0);
+		igTableSetupColumn("Used by", ImGuiTableColumnFlags_WidthStretch, 0.7f, 0);
+		igPushStyleColor_Vec4(ImGuiCol_Text, colv(C_DIM));
 		igTableHeadersRow();
-		for (const cJSON *e = cast->child; e; e = e->next) {
-			igTableNextRow(0, S(28));
+		igPopStyleColor(1);
+		int i = 0;
+		for (const cJSON *e = cast->child; e; e = e->next, i++) {
+			igPushID_Int(i);
+			float h = S(44);
+			igTableNextRow(0, h);
 			igTableNextColumn();
-			igPushFont(F_MONO, MONO_SIZE);
-			igTextUnformatted(e->string ? e->string : "", NULL);
-			igPopFont();
+			V2 p = igGetCursorScreenPos();
+			bool sel = !strcmp(cast_sel, e->string);
+			char first[256];
+			int uses = cast_uses(e->string, first, sizeof first);
+			if (igSelectable_Bool("##row", sel, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick, v2(0, h))) {
+				snprintf(cast_sel, sizeof cast_sel, "%s", e->string);
+				if (igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left) && first[0]) {
+					select_place(first, true);
+					want_mid_tab = 0;
+				}
+			}
+			ImDrawList *dl = igGetWindowDrawList();
+			float size = igGetFontSize();
+			ImDrawList_AddText_FontPtr(dl, F_MONO, fs(MONO_SIZE), v2(p.x + S(6), p.y + (h - fs(MONO_SIZE)) / 2), col(C_TEXT),
+			                           e->string, NULL, 0, NULL);
 			igTableNextColumn();
+			p = igGetCursorScreenPos();
 			const cJSON *face = cJSON_GetObjectItemCaseSensitive(e, "face");
-			char *j = face ? json_inline(face) : NULL;
-			igTextUnformatted(j ? j : "", NULL);
-			free(j);
-			igTableNextColumn();
-			const cJSON *name = cJSON_GetObjectItemCaseSensitive(e, "name");
-			if (cJSON_IsString(name))
-				igTextUnformatted(name->valuestring, NULL);
+			if (face)
+				draw_picture_small(dl, face, v2(p.x, p.y + S(5)), v2(p.x + S(30), p.y + h - S(5)), true);
+			char buf[300];
+			if (cJSON_IsNumber(face))
+				snprintf(buf, sizeof buf, "%d", (int)face->valuedouble);
+			else if (cJSON_IsString(face))
+				snprintf(buf, sizeof buf, "%s", base_name(face->valuestring));
 			else
-				igTextColored(colv(C_FAINT), "the game's name for the face");
+				snprintf(buf, sizeof buf, "no face");
+			draw_text(dl, F_UI, size, v2(p.x + S(38), p.y + (h - size) / 2), col(face ? C_TEXT : C_BAD), buf,
+			          p.x + igGetContentRegionAvail().x);
+			igTableNextColumn();
+			p = igGetCursorScreenPos();
+			const cJSON *name = cJSON_GetObjectItemCaseSensitive(e, "name");
+			const char *who = cJSON_IsNumber(face) ? media_face_name((int)face->valuedouble) : NULL;
+			if (cJSON_IsString(name))
+				snprintf(buf, sizeof buf, "%s", name->valuestring);
+			else
+				snprintf(buf, sizeof buf, "%s%s", who ? who : "the game's", who ? " (the game's)" : "");
+			draw_text(dl, F_UI, size, v2(p.x, p.y + (h - size) / 2), col(cJSON_IsString(name) ? C_TEXT : C_FAINT), buf,
+			          p.x + igGetContentRegionAvail().x);
+			igTableNextColumn();
+			p = igGetCursorScreenPos();
+			snprintf(buf, sizeof buf, uses ? "%d line%s" : "no line", uses, uses == 1 ? "" : "s");
+			draw_text(dl, F_UI, size, v2(p.x, p.y + (h - size) / 2), col(uses ? C_TEXT : C_FAINT), buf, p.x + igGetContentRegionAvail().x);
+			igPopID();
 		}
 		igEndTable();
 	}
 	igSpacing();
+	igBeginDisabled(!can);
+	if (igButton("+ Add to the cast", v2(0, 0)))
+		cast_add();
+	igEndDisabled();
+	igSetItemTooltip("A name for a face, for the lines to use");
+	igSpacing();
 	section("The file", NULL);
-	const cJSON *once = cJSON_GetObjectItemCaseSensitive(D.root, "once");
+	cJSON *once = cJSON_GetObjectItemCaseSensitive(D.root, "once");
 	const cJSON *fmt = cJSON_GetObjectItemCaseSensitive(D.root, "format");
 	const cJSON *schema = cJSON_GetObjectItemCaseSensitive(D.root, "$schema");
+	igAlignTextToFramePadding();
 	igTextColored(colv(C_DIM), "Plays once");
 	igSameLine(S(130), 0);
-	if (cJSON_IsString(once))
-		igText("once per save, with the flag %s", once->valuestring);
-	else
-		igTextColored(colv(C_FAINT), "every time it is played");
+	bool on = once != NULL;
+	igBeginDisabled(!can);
+	if (igCheckbox("Once per save, with the flag", &on)) {
+		if (on) {
+			char flag[300], base[200];
+			snprintf(base, sizeof base, "%s", base_name(D.rel));
+			char *dot = strrchr(base, '.');
+			if (dot)
+				*dot = 0;
+			snprintf(flag, sizeof flag, "%s:%s-seen", ui_mod_id(), base);
+			cJSON_AddItemToObject(D.root, "once", cJSON_CreateString(flag));
+		} else {
+			cJSON_DeleteItemFromObjectCaseSensitive(D.root, "once");
+		}
+		doc_changed("");
+		once = cJSON_GetObjectItemCaseSensitive(D.root, "once");
+	}
+	igEndDisabled();
+	igSetItemTooltip("The game plays it once in a save: a flag of this name is set at its start, and a save that has it skips it");
+	if (cJSON_IsString(once)) {
+		igSameLine(0, S(8));
+		/* Written when the field is left; filled again when the file's flag changes (an undo). */
+		static char flag_buf[256], flag_was[256];
+		if (strcmp(flag_was, once->valuestring)) {
+			snprintf(flag_buf, sizeof flag_buf, "%s", once->valuestring);
+			snprintf(flag_was, sizeof flag_was, "%s", once->valuestring);
+		}
+		igSetNextItemWidth(S(260));
+		igInputText("##once", flag_buf, sizeof flag_buf, ImGuiInputTextFlags_CharsNoBlank | (can ? 0 : ImGuiInputTextFlags_ReadOnly), NULL, NULL);
+		if (igIsItemDeactivatedAfterEdit() && flag_buf[0] && strcmp(flag_buf, once->valuestring)) {
+			cJSON_ReplaceItemInObjectCaseSensitive(D.root, "once", cJSON_CreateString(flag_buf));
+			doc_changed("");
+		}
+	} else if (once) {
+		igSameLine(0, S(8));
+		igTextColored(colv(C_BAD), "not a flag's name: its JSON is kept");
+	}
 	igTextColored(colv(C_DIM), "Format");
 	igSameLine(S(130), 0);
 	if (cJSON_IsNumber(fmt))
@@ -1143,7 +1617,6 @@ static void cast_tab(void)
 		igTextColored(colv(C_FAINT), "none (text editors check the file as it is typed when it has one)");
 }
 
-static int want_mid_tab = -1;   /* 0 Steps, 1 Cast and file: opened next frame */
 
 static void middle(void)
 {
@@ -1151,6 +1624,7 @@ static void middle(void)
 		return;
 	int want = want_mid_tab;
 	want_mid_tab = -1;
+	cast_tab_shown = false;
 	if (igBeginTabItem("Steps", NULL, want == 0 ? ImGuiTabItemFlags_SetSelected : 0)) {
 		if (!D.open) {
 			igSpacing();
@@ -1173,6 +1647,10 @@ static void middle(void)
 			if (!steps->child)
 				igTextColored(colv(C_FAINT), "No steps yet: + Add step writes the first.");
 			draw_steps(steps, "steps", 0, cJSON_GetObjectItemCaseSensitive(D.root, "cast"));
+			if (move_req.on) {
+				move_req.on = false;
+				op_move_to(move_req.from, move_req.list, move_req.index);
+			}
 			igEndChild();
 			igPopStyleVar(1);
 		}
@@ -1181,6 +1659,7 @@ static void middle(void)
 		keys();
 	}
 	if (igBeginTabItem("Cast and file", NULL, want == 1 ? ImGuiTabItemFlags_SetSelected : 0)) {
+		cast_tab_shown = true;
 		if (D.root && cJSON_IsObject(D.root))
 			cast_tab();
 		else if (D.open)
@@ -1209,45 +1688,102 @@ static void fill_edit(void)
 	edit_gen = doc_gen;
 }
 
-static void right_side(void)
+/* The stage's foot: what is on each layer, and the page shown with its arrows. */
+static void stage_foot(const struct stage *sg, bool own_line, int *page)
 {
-	igTextUnformatted("Step", NULL);
-	igSameLine(0, S(8));
-	igTextColored(colv(C_FAINT), "\xC2\xB7 what it writes in the file");
-	igSpacing();
-	cJSON *st = sel_step(NULL, NULL);
-	bool typing = strcmp(edit_buf, edit_src) != 0;
-	if (strcmp(edit_for, UI.sel) || edit_gen != doc_gen || (edit_at != D.at && !typing))
-		fill_edit();
-	if (!st) {
-		igPushTextWrapPos(0);
-		igTextColored(colv(C_FAINT), "Select a step to see the JSON it writes. Each kind of step gets its own fields in a "
-		              "later version of the editor; until then a step is edited as the file holds it.");
-		igPopTextWrapPos();
-		return;
+	static const char *const names[L_COUNT] = { "Wallpaper", "Mask", "Background", "Standing", "Small", "CG" };
+	char info[600] = "";
+	size_t o = 0;
+	for (int i = 0; i < L_COUNT && o < sizeof info; i++) {
+		const cJSON *v = sg->layer[i];
+		if (!v || (cJSON_IsNumber(v) && v->valuedouble <= 0))
+			continue;
+		if (cJSON_IsNumber(v))
+			o += (size_t)snprintf(info + o, sizeof info - o, "%s%s %d", o ? " \xC2\xB7 " : "", names[i], (int)v->valuedouble);
+		else if (cJSON_IsString(v))
+			o += (size_t)snprintf(info + o, sizeof info - o, "%s%s %s", o ? " \xC2\xB7 " : "", names[i], base_name(v->valuestring));
 	}
-	const char *kind = step_kind(st);
-	const struct kind_info *k = kind ? kind_find(kind) : NULL;
-	ImDrawList *dl = igGetWindowDrawList();
-	V2 p = igGetCursorScreenPos();
-	float h = S(24);
-	float pw = tag_pill(dl, p, k ? k->tag : "?", k ? k->group : TAG_BAD, h);
-	igDummy(v2(pw, h));
-	igSameLine(0, S(10));
+	const cJSON *face = sg->line ? line_face(sg->line, sg->cast) : NULL;
+	if (o < sizeof info && cJSON_IsNumber(face))
+		o += (size_t)snprintf(info + o, sizeof info - o, "%sface %d", o ? " \xC2\xB7 " : "", (int)face->valuedouble);
+	else if (o < sizeof info && cJSON_IsString(face))
+		o += (size_t)snprintf(info + o, sizeof info - o, "%sface %s", o ? " \xC2\xB7 " : "", base_name(face->valuestring));
+	if (sg->screen && o < sizeof info)
+		snprintf(info + o, sizeof info - o, "%sthe screen %s", o ? " \xC2\xB7 " : "", sg->screen == 'w' ? "white" : "black");
+	int pages = sg->line ? line_pages(sg->line) : 0;
+	float arrows = pages > 1 ? S(150) : 0;
 	igAlignTextToFramePadding();
-	igTextUnformatted(k ? k->title : "Not a step", NULL);
-	float pw2 = text_w(F_MONO, fs(13), UI.sel);
-	igSameLine(igGetWindowWidth() - pw2 - S(16), 0);
-	igPushFont(F_MONO, 13);
-	igTextColored(colv(C_FAINT), "%s", UI.sel);
+	igPushFont(NULL, 14);
+	char cut[700];
+	igTextColored(colv(C_FAINT), "%s", fit(F_UI, fs(14), info[0] ? info : "Nothing on the stage yet", igGetContentRegionAvail().x - arrows - S(8),
+	                                    cut, sizeof cut));
 	igPopFont();
-	igSpacing();
+	if (pages > 1) {
+		igSameLine(content_right() - arrows, 0);
+		igBeginDisabled(*page <= 0);
+		if (igArrowButton("##prev", ImGuiDir_Left))
+			(*page)--;
+		igEndDisabled();
+		igSameLine(0, S(6));
+		igAlignTextToFramePadding();
+		igPushFont(NULL, 14);
+		igTextColored(colv(C_DIM), "page %d of %d", *page + 1, pages);
+		igPopFont();
+		igSameLine(0, S(6));
+		igBeginDisabled(*page >= pages - 1);
+		if (igArrowButton("##next", ImGuiDir_Right))
+			(*page)++;
+		igEndDisabled();
+		if (!own_line && igIsItemHovered(0))
+			igSetTooltip("The line's pages: the box shows its last page until the next line");
+	}
+}
 
-	bool ro = !doc_editable();
-	float bottom = S(84);
+/* The stage sketch at the top of the right side, for the selected step. */
+static void stage_for_step(const cJSON *st)
+{
+	struct stage sg;
+	memset(&sg, 0, sizeof sg);
+	if (D.root && st)
+		stage_walk(D.root, UI.sel, &sg);
+	else
+		sg.cast = D.root ? cJSON_GetObjectItemCaseSensitive(D.root, "cast") : NULL;
+	bool own = sg.line && sg.line == st;
+	int pages = sg.line ? line_pages(sg.line) : 0;
+	static const cJSON *last_line;
+	static int other_page;
+	/* The selected line shows the page being typed; a line before it shows its last page. */
+	if (sg.line != last_line) {
+		last_line = sg.line;
+		other_page = pages > 0 ? pages - 1 : 0;
+	}
+	int *page = own ? &fields_page : &other_page;
+	if (*page >= pages)
+		*page = pages > 0 ? pages - 1 : 0;
+	if (*page < 0)
+		*page = 0;
+	stage_draw(&sg, *page, igGetContentRegionAvail().x);
+	stage_foot(&sg, own, page);
+}
+
+static bool json_open;   /* the step's JSON shown under its fields */
+
+/* The step's JSON as the file holds it, editable, under the fields. */
+static void step_json(bool ro)
+{
+	bool typing = strcmp(edit_buf, edit_src) != 0;
+	igSetNextItemOpen(json_open, ImGuiCond_Always);
+	json_open = igCollapsingHeader_TreeNodeFlags("JSON##stepjson", 0);
+	if (!json_open)
+		return;
 	igPushFont(F_MONO, MONO_SIZE);
 	igPushStyleColor_Vec4(ImGuiCol_FrameBg, colv(C_FIELD));
-	igInputTextMultiline("##json", edit_buf, sizeof edit_buf, v2(-1, -bottom),
+	float lines = 3;
+	for (const char *c = edit_buf; *c; c++)
+		lines += *c == '\n';
+	if (lines > 18)
+		lines = 18;
+	igInputTextMultiline("##json", edit_buf, sizeof edit_buf, v2(-1, igGetTextLineHeight() * lines),
 	                     ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_WordWrap | (ro ? ImGuiInputTextFlags_ReadOnly : 0), NULL, NULL);
 	bool left_after_edit = igIsItemDeactivatedAfterEdit();
 	igPopStyleColor(1);
@@ -1255,7 +1791,6 @@ static void right_side(void)
 	typing = strcmp(edit_buf, edit_src) != 0;
 	if (left_after_edit && typing)
 		apply_edit();
-	igSpacing();
 	igBeginDisabled(ro || !typing);
 	if (accent_button("Apply", v2(0, 0)))
 		apply_edit();
@@ -1270,9 +1805,156 @@ static void right_side(void)
 		igPushTextWrapPos(0);
 		igTextColored(colv(C_BAD), "Not applied: %s", edit_why);
 		igPopTextWrapPos();
-	} else if (ro) {
-		igTextColored(colv(C_FAINT), "Read-only: %s", D.root ? "this editor does not write this file" : "the file cannot be read");
 	}
+}
+
+static void cast_side(void);
+
+static void right_side(void)
+{
+	if (cast_tab_shown && D.root) {
+		cast_side();
+		return;
+	}
+	igTextUnformatted("Stage", NULL);
+	igSameLine(0, S(8));
+	igTextColored(colv(C_FAINT), "\xC2\xB7 a sketch: Play shows it in the game");
+	cJSON *st = sel_step(NULL, NULL);
+	bool typing = strcmp(edit_buf, edit_src) != 0;
+	if (strcmp(edit_for, UI.sel) || edit_gen != doc_gen || (!typing && (edit_at != D.at || D.live)))
+		fill_edit();
+	stage_for_step(st);
+	igSpacing();
+	ImDrawList_AddLine(igGetWindowDrawList(), igGetCursorScreenPos(),
+	                   v2(igGetCursorScreenPos().x + igGetContentRegionAvail().x, igGetCursorScreenPos().y), col(C_LINE), S(1));
+	igSpacing();
+	if (!st) {
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_FAINT), D.open ? "Select a step: its fields come here." : "Open a scene to see its steps.");
+		igPopTextWrapPos();
+		return;
+	}
+	igBeginChild_Str("##fields", v2(0, 0), 0, 0);
+	const char *kind = step_kind(st);
+	const struct kind_info *k = kind ? kind_find(kind) : NULL;
+	ImDrawList *dl = igGetWindowDrawList();
+	V2 p = igGetCursorScreenPos();
+	float h = S(24);
+	float pw = tag_pill(dl, p, k ? k->tag : "?", k ? k->group : TAG_BAD, h);
+	igDummy(v2(pw, h));
+	igSameLine(0, S(10));
+	igAlignTextToFramePadding();
+	igTextUnformatted(k ? k->title : "Not a step", NULL);
+	float pw2 = text_w(F_MONO, fs(13), UI.sel);
+	igSameLine(content_right() - pw2, 0);
+	igPushFont(F_MONO, 13);
+	igTextColored(colv(C_FAINT), "%s", UI.sel);
+	igPopFont();
+	igSpacing();
+	bool ro = !doc_editable();
+	if (ro)
+		igTextColored(colv(C_FAINT), "Read-only: %s", D.root ? "this editor does not write this file" : "the file cannot be read");
+	fields_step(st, UI.sel, ro);
+	igSpacing();
+	igSpacing();
+	step_json(ro);
+	igEndChild();
+}
+
+/* The cast entry picked in Cast and file: its first line on the stage, then its fields. */
+static void cast_side(void)
+{
+	cJSON *cast = cJSON_GetObjectItemCaseSensitive(D.root, "cast");
+	cJSON *e = cJSON_GetObjectItemCaseSensitive(cast, cast_sel);
+	igTextUnformatted("Stage", NULL);
+	igSameLine(0, S(8));
+	igTextColored(colv(C_FAINT), "\xC2\xB7 a sketch: Play shows it in the game");
+	char first[256];
+	int uses = e ? cast_uses(cast_sel, first, sizeof first) : 0;
+	struct stage sg;
+	memset(&sg, 0, sizeof sg);
+	sg.cast = cast;
+	cJSON *made = NULL;
+	if (uses) {
+		stage_walk(D.root, first, &sg);
+	} else if (e) {
+		/* No line names it yet: an empty line of its own. */
+		made = cJSON_CreateObject();
+		cJSON_AddStringToObject(made, "say", cast_sel);
+		cJSON_AddStringToObject(made, "text", "");
+		sg.line = made;
+	}
+	static int page;
+	if (sg.line && page >= line_pages(sg.line))
+		page = 0;
+	stage_draw(&sg, page, igGetContentRegionAvail().x);
+	igAlignTextToFramePadding();
+	igPushFont(NULL, 14);
+	if (uses)
+		igTextColored(colv(C_FAINT), "Its first line, %s", first);
+	else
+		igTextColored(colv(C_FAINT), e ? "No line names it yet" : "Pick a name of the cast");
+	igPopFont();
+	cJSON_Delete(made);
+	igSpacing();
+	ImDrawList_AddLine(igGetWindowDrawList(), igGetCursorScreenPos(),
+	                   v2(igGetCursorScreenPos().x + igGetContentRegionAvail().x, igGetCursorScreenPos().y), col(C_LINE), S(1));
+	igSpacing();
+	if (!e) {
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_FAINT), "The cast names a face for the lines: a line says \"say\": \"name\" instead of a face's "
+		              "number, and the name plate comes with it.");
+		igPopTextWrapPos();
+		return;
+	}
+	igBeginChild_Str("##castfields", v2(0, 0), 0, 0);
+	ImDrawList *dl = igGetWindowDrawList();
+	V2 p = igGetCursorScreenPos();
+	float pw = tag_pill(dl, p, "CAST", TAG_LINE, S(24));
+	igDummy(v2(pw, S(24)));
+	igSameLine(0, S(10));
+	igAlignTextToFramePadding();
+	igTextUnformatted(cast_sel, NULL);
+	char where[160];
+	snprintf(where, sizeof where, "cast.%s", cast_sel);
+	igSameLine(content_right() - text_w(F_MONO, fs(13), where), 0);
+	igPushFont(F_MONO, 13);
+	igTextColored(colv(C_FAINT), "%s", where);
+	igPopFont();
+	igSpacing();
+	bool ro = !doc_editable();
+	const char *now = fields_cast(cast_sel, ro);
+	if (strcmp(now, cast_sel))
+		snprintf(cast_sel, sizeof cast_sel, "%s", now);
+	igSetCursorPosX(S(108));
+	igAlignTextToFramePadding();
+	igTextColored(colv(C_DIM), uses ? "Used by %d line%s" : "No line uses it", uses, uses == 1 ? "" : "s");
+	if (uses) {
+		igSameLine(0, S(10));
+		if (igSmallButton("Show the first"))
+			select_place(first, true), want_mid_tab = 0;
+	}
+	igSpacing();
+	igSetCursorPosX(S(108));
+	igBeginDisabled(ro || uses > 0);
+	if (igButton("Remove from the cast", v2(0, 0)))
+		cast_remove(cast_sel);
+	igEndDisabled();
+	if (uses && igIsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		igSetTooltip("Its lines name it: give them another speaker first");
+	igSpacing();
+	igSpacing();
+	cJSON *entry = cJSON_GetObjectItemCaseSensitive(cast, cast_sel);
+	if (entry && igCollapsingHeader_TreeNodeFlags("JSON##castjson", 0)) {
+		char *j = json_inline(entry);
+		igPushFont(F_MONO, MONO_SIZE);
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_DIM), "\"%s\": %s", cast_sel, j);
+		igPopTextWrapPos();
+		igPopFont();
+		free(j);
+	}
+	igEndChild();
 }
 
 /* ---- the bottom: problems and the status line ---- */
@@ -1577,7 +2259,23 @@ bool ui_do(const char *action)
 		           : !strcmp(arg, "changed") ? M_CHANGED : !strcmp(arg, "new") ? M_NEW : M_NONE;
 	else if (!strcmp(name, "fold"))
 		problems_folded = !problems_folded;
-	else
+	else if (!strcmp(name, "page"))
+		fields_page = atoi(arg);
+	else if (!strcmp(name, "json"))
+		json_open = true;
+	else if (!strcmp(name, "cast")) {
+		snprintf(cast_sel, sizeof cast_sel, "%s", arg);
+		want_mid_tab = 1;
+		return cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(D.root, "cast"), arg) != NULL;
+	} else if (!strcmp(name, "castadd"))
+		cast_add();
+	else if (!strcmp(name, "move")) {   /* move=FROM|LIST|INDEX, as a drop does it */
+		char from[256], list[256];
+		int index = 0;
+		if (sscanf(arg, "%255[^|]|%255[^|]|%d", from, list, &index) != 3)
+			return false;
+		return op_move_to(from, list, index);
+	} else
 		return false;
 	return true;
 }
@@ -1588,6 +2286,7 @@ void ui_frame(void)
 {
 	ImGuiIO *io = igGetIO_Nil();
 	double now = igGetTime();
+	fields_frame();
 	if (!UI.shot && now >= next_scan)
 		rescan();
 	if (!UI.shot && now >= next_watch) {

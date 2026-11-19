@@ -284,7 +284,8 @@ int main(int argc, char **argv)
 	}
 
 	SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
-	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0) {
+	/* No sound device for --shot: nothing plays there. */
+	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | (A.shot_path ? 0 : SDL_INIT_AUDIO)) != 0) {
 		on_error(SDL_GetError());
 		return 1;
 	}
@@ -355,6 +356,7 @@ int main(int argc, char **argv)
 	ImGui_ImplSDL2_InitForOpenGL(g_window, gl);
 	ImGui_ImplOpenGL3_Init("#version 130");
 
+	media_init(true);
 	UI.shot = A.shot_path != NULL;
 	ui_init(dir, A.mod_dir, A.mod, A.file, A.select);
 	int failed_dos = 0;
@@ -395,6 +397,7 @@ int main(int argc, char **argv)
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplSDL2_NewFrame();
 		igNewFrame();
+		media_frame();
 		ui_frame();
 		igRender();
 		if (UI.quit)
@@ -412,7 +415,8 @@ int main(int argc, char **argv)
 		glClear(GL_COLOR_BUFFER_BIT);
 		ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
 		if (fbo) {
-			if (UI.frame > 12) {
+			/* The shot waits for the pictures it shows (a few seconds at most). */
+			if (UI.frame > 12 && (media_idle() || UI.frame > 900)) {
 				code = shot_save(A.w, A.h, A.shot_path) ? 0 : 1;
 				if (code)
 					fprintf(stderr, APP_EXE ": could not write %s\n", A.shot_path);

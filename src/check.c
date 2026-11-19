@@ -279,6 +279,38 @@ int run_selftest(const char *path)
 	expect(json_same(mem, D.root) && D.styled && !doc_dirty(), "read again: the same values, in the layout");
 	cJSON_Delete(mem);
 
+	/* Typing in a field: the file follows each letter (as fields.c does it), and the field left
+	 * makes one step to undo for the whole word. */
+	int at0 = D.at;
+	char *before = xstrdup(D.snaps[D.at].text);
+	const char *word[] = { "a", "ab", "abc" };
+	for (int i = 0; i < 3; i++) {
+		cJSON *typed = cJSON_CreateObject();
+		cJSON_AddStringToObject(typed, "note", word[i]);
+		cJSON_ReplaceItemInArray(doc_steps(), 0, typed);
+		D.live = true;
+		snprintf(D.live_place, sizeof D.live_place, "steps[0]");
+	}
+	expect(doc_dirty() && D.at == at0 && doc_can_undo(), "typing: unsaved, no step to undo yet, Undo ready");
+	doc_settle();
+	expect(!D.live && D.at == at0 + 1 && strstr(D.snaps[D.at].text, "\"abc\""), "the field left: one step for the word");
+	doc_undo(place, sizeof place);
+	expect(!strcmp(D.snaps[D.at].text, before) && !strcmp(place, "steps[0]"), "one undo takes the whole word back");
+	doc_redo(place, sizeof place);
+	cJSON_ReplaceItemInArray(doc_steps(), 0, cJSON_Parse("{ \"note\": \"abcd\" }"));
+	D.live = true;
+	doc_undo(place, sizeof place);
+	expect(!D.live && D.at == at0 + 1 && strstr(D.snaps[D.at].text, "\"abc\"") && doc_can_redo(),
+	       "Undo while typing: the typing kept as a step, then taken back");
+	doc_redo(place, sizeof place);
+	cJSON_ReplaceItemInArray(doc_steps(), 0, cJSON_Parse("{ \"note\": \"abcde\" }"));
+	D.live = true;
+	saved = doc_save(why, sizeof why);
+	disk = read_all(path);
+	expect(saved && !D.live && !doc_dirty() && disk && strstr(disk, "\"abcde\""), "Save while typing: what was typed is saved");
+	free(disk);
+	free(before);
+
 	/* Changed on disk with nothing unsaved: read again. */
 	cJSON *other = cJSON_Duplicate(D.root, true);
 	cJSON *note = cJSON_CreateObject();
