@@ -1,0 +1,18 @@
+# Credits
+
+RQ Scene Editor is GPL-2.0-or-later (`COPYING`). It is built from these, each under its own license:
+
+| What | By | License | Where |
+| --- | --- | --- | --- |
+| [Rance Browser](https://github.com/RQ-Modding/rance-browser)'s readers, the `rance_core` library | RQ Modding | GPL-2.0-or-later | `subprojects/rance-browser` (submodule): the game folder, its archives, pictures, music and sounds, RQ MOD's names |
+| [libsys4](https://github.com/nunuhara/libsys4) | Nunuhara Cabbage and contributors | GPL-2.0-or-later | `subprojects/libsys4` (submodule): the game's archives and picture formats, files with UTF-8 names |
+| [cJSON](https://github.com/DaveGamble/cJSON) 1.7.12 | Dave Gamble and contributors | MIT | through `rance_core`: the scene files, read with the same cJSON as RQ MOD's loader |
+| [Dear ImGui 1.92.9](https://github.com/ocornut/imgui) | Omar Cornut and contributors | MIT | through `rance_core` |
+| [cimgui 1.92.9b](https://github.com/cimgui/cimgui) | Stephan Dilly and contributors | MIT | through `rance_core` |
+| [SDL2](https://www.libsdl.org/) | Sam Lantinga and contributors | zlib | linked in |
+| [libsndfile](https://libsndfile.github.io/libsndfile/), with libogg, libvorbis, FLAC, Opus and mpg123 | their authors | LGPL-2.1-or-later and others | linked in, through `rance_core` |
+| libjpeg-turbo, libwebp, libpng, zlib, libdeflate | their authors | BSD-style, zlib, MIT | linked in, through libsys4 |
+
+How the editor reads a scene file (a byte-order mark skipped, the size limit, a field given twice,
+the depth limit and the messages) follows RQ MOD's loader, so that a file the game refuses is refused
+here with the same words.

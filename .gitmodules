@@ -1,0 +1,6 @@
+[submodule "subprojects/rance-browser"]
+	path = subprojects/rance-browser
+	url = https://github.com/RQ-Modding/rance-browser.git
+[submodule "subprojects/libsys4"]
+	path = subprojects/libsys4
+	url = https://github.com/nunuhara/libsys4

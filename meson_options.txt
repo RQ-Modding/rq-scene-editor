@@ -1,0 +1,2 @@
+option('build_note', type : 'string', value : '',
+       description : 'A note shown after the version, such as "RQ MOD 2.61.0"')
