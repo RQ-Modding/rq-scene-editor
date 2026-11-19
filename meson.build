@@ -9,7 +9,7 @@
 # It reads the game through Rance Browser's readers (the rance_core library): the game folder, its
 # CGs, music and sounds, RQ MOD's names, Dear ImGui (cimgui) on SDL2 and OpenGL 3.
 project('rq-scene-editor', 'c', 'cpp',
-        version : '0.2.0',
+        version : '0.3.0',
         meson_version : '>= 0.59',
         default_options : ['c_std=c11', 'cpp_std=c++17', 'warning_level=1'])
 add_project_arguments('-D_DEFAULT_SOURCE', language : 'c')

@@ -7,7 +7,7 @@ A scene file is a mod's scene as JSON: the cast, then the steps the game plays (
 music, choices, branches). A mod plays one with `rq.scene.file`. The editor lists a mod's scene
 files, shows each file's steps as a list with its branches as a tree, and writes the file back.
 
-**State: 0.2.0, not released.** What it does so far:
+**State: 0.3.0, not released.** What it does so far:
 
 - it finds the game folder and lists the game's mods, or opens a mod's folder from anywhere;
 - it lists the mod's scene files, with a line count and why a file cannot be read;
@@ -16,8 +16,10 @@ files, shows each file's steps as a list with its branches as a tree, and writes
   `else`, a choice's rows) folded under their step;
 - it adds a step of any kind, copies, deletes and drags steps, also into and out of branches;
 - it edits each kind of step in fields of its own, with its JSON folded under them;
-- it draws a sketch of the stage at the selected step: the pictures, the message box with the
-  face and the name, and the page broken into lines in the game's font as the game breaks it;
+- it draws the stage at the selected step as the game draws its screen, from the game's own
+  pictures: the layers each step before it has set, the game's message box with the face, the name
+  plate and the page in the game's font, its buttons, and a choice's menu; motion (effects, slides,
+  shakes) does not show yet;
 - it edits the cast: faces, name plates, renaming an entry with the lines that use it;
 - it has undo and redo, and it notices when a file changes on disk;
 - it reads each file as RQ MOD reads it, so a file the game refuses shows the game's own message;
@@ -95,8 +97,9 @@ rq-scene-editor --selftest FILE
   first: `select=PLACE`, `add=KIND`, `apply=JSON`, `copy`, `delete`, `up`, `down`, `undo`,
   `redo`, `tab=steps|cast`, `modal=unsaved|layout|changed|new`, `fold`, `page=N` (the page shown
   on the stage), `json` (the JSON unfolded), `cast=NAME`, `castadd` and `move=FROM|LIST|INDEX`
-  (the step at FROM put at INDEX of the list LIST, such as `steps` or `steps[2].then`). Nothing is
-  saved.
+  (the step at FROM put at INDEX of the list LIST, such as `steps` or `steps[2].then`). `stage`
+  draws the stage alone over the whole window: with `--size 1024x768 --scale 1` it is the game's
+  screen pixel for pixel. Nothing is saved.
 - `--selftest` tries editing, undo, saving and changes on disk on FILE. FILE must be a copy: it is
   written.
 - A step's place is written as `steps[4]`, `steps[2].then[0]` or `steps[3].choice[1].steps[0]`.
@@ -130,7 +133,8 @@ readers, the static library `rance_core`, which comes with Dear ImGui (cimgui), 
 are submodules in `subprojects/`. Inside RQ MOD, meson shares one copy of each with the engine.
 
 The window uses Windows' own fonts: Segoe UI, Consolas for the JSON, Yu Gothic for Japanese text.
-The stage sketch and the lines in the list use the game's own font, read from the game folder.
+The stage and the lines in the list use the game's own font, read from the game folder; the stage's
+pictures and the names on its plates come from the game's own files.
 
 ## License
 

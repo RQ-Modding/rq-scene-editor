@@ -156,17 +156,19 @@ const char *media_mod_dir(void);
 /* A picture value of a scene file (a CG number, or a path in the mod's folder), whole, for the
  * stage; PIC_LOADING for a frame or two while it is read. */
 const struct picture *media_picture(const cJSON *v);
+const struct picture *media_cg(int no);   /* a CG of the game by its number, the same way */
 struct thumb *media_thumb(int no);     /* a CG's thumbnail, made on Rance Browser's thread */
 bool media_cg_exists(int no);
 const char *media_face_owner(int face);   /* rq.ids' character for a face CG, or NULL */
-const char *media_face_name(int face);    /* the plate's name for it: the first word of that */
+const char *media_face_name(int face);    /* the plate's name for it, from the game's table */
+bool media_plates_known(void);            /* the game's table was read from its .ain */
 const char *media_music_name(int no);     /* rq.ids.music's name, or NULL */
 bool media_can_play(int kind, int no);
 bool media_playing(int kind, int no);
 void media_play(int kind, int no);        /* plays, or stops when it is playing */
 void media_stop(void);
 
-/* ---- the stage sketch (stage.c) ---- */
+/* ---- the stage (stage.c): the game's screen at a step, from the game's own pieces ---- */
 
 enum { L_WALL, L_MASK, L_BG, L_PORTRAIT, L_MINI, L_CG, L_COUNT };
 
@@ -174,7 +176,8 @@ enum { L_WALL, L_MASK, L_BG, L_PORTRAIT, L_MINI, L_CG, L_COUNT };
  * message box and, when the step is a choice, its rows. Values point into the file's JSON. */
 struct stage {
 	const cJSON *layer[L_COUNT];
-	int screen;              /* 0, 'b' black, 'w' white */
+	int screen;              /* the screen's colour under the pictures: 0, 'b' black, 'w' white */
+	int mask_cg;             /* the mask wallpaper a set puts in (the game's 5550), when no step named one */
 	const cJSON *line;       /* the say, think or narrate on show */
 	const cJSON *choice;     /* the selected step, when it is a choice */
 	const cJSON *cast;
@@ -182,22 +185,27 @@ struct stage {
 };
 
 void stage_walk(const cJSON *root, const char *place, struct stage *s);
-/* Draws the sketch at the cursor, w wide (4:3), the line's page `page` (from 0). */
+/* Draws the stage at the cursor, w wide (4:3), the line's page `page` (from 0). */
 void stage_draw(const struct stage *s, int page, float w);
+/* The game's message frame for a line (1 a line, 2 a thought, 3 narration, 4 on paper, 6 to 8 the
+ * E frames of a page: true line), or 0; and the lines its box holds (4, or 3 in an E frame). */
+int line_frame(const cJSON *line);
+int line_limit(const cJSON *line);
 const cJSON *line_text(const cJSON *line);            /* text, or narrate's value */
 int line_pages(const cJSON *line);                     /* 0 when it is not a line */
 const char *line_page(const cJSON *line, int page);   /* NULL past the end */
-/* A page as the game lays it out in its box: how many lines it takes (a page holds 4). */
-int page_lines(const char *page);
-/* The plate a line shows: its name, else the cast's, else the game's character for the face (*game
+/* A page of a line as the game lays it out in the line's frame: how many lines it takes. */
+int page_lines(const cJSON *line, const char *page);
+/* The plate a line shows: its name, else the cast's, else the game's name for the face (*game
  * true), else NULL. */
 const char *line_plate(const cJSON *line, const cJSON *cast, bool *game);
 /* The face a line shows (a number or a path), from the cast when it names one; NULL for none. */
 const cJSON *line_face(const cJSON *line, const cJSON *cast);
-/* The box's text at the game's 1024 by 768: 32 pixels to the em in the game's font, which Dear
- * ImGui calls 43.6 (it sizes a font by its whole height), on lines 36 pixels apart. */
+/* The box's text at the game's 1024 by 768: the game's size 40, measured on its shots as 32 pixels
+ * to the em in its font, which Dear ImGui calls 43.6 (it sizes a font by its whole height), on lines
+ * 35 pixels apart (its size 40 and line space -5). Other text of the game's is drawn at its size times BOX_TEXT_SIZE / 40. */
 #define BOX_TEXT_SIZE 43.6f
-#define BOX_LINE_H 36.0f
+#define BOX_LINE_H 35.0f
 
 /* ---- the selected step's fields (fields.c) ---- */
 

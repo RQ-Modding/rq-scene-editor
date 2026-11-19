@@ -2,6 +2,34 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 0.3.0 (not released)
+
+The stage as the game draws it, from the game's own pictures.
+
+- **The game's screen.** The stage is no longer a sketch. It draws the screen from the game's own
+  pictures, at the game's places and in the game's order:
+  - the wallpaper, the scene CG, the background in its frame, the small picture and the portrait;
+    `cg`, `black`, `white` and `clear` empty the layers as the game does, and `set` puts the game's
+    mask picture under its layers;
+  - the game's message box for each kind of line, with the say, think and narrate frames, the wide
+    frames of a `page` line (three lines, no face) and the stage directions' frame with its edge;
+  - the face in its frame, the name plate in the game's bold yellow, shrunk to fit as the game
+    shrinks it, the AUTO, SKIP and CONFIG buttons and the click mark;
+  - the page in the game's font and colours, at the game's place and line height, an opening quote
+    hanging left of the lines, and an apostrophe drawn as the game's box draws it (’);
+  - a choice's menu in the game's look, at its place, with its buttons and separators, over an empty
+    box.
+
+  Measured against shots of the game, the text falls within a pixel or two of where the game puts
+  it. Motion (effects, slides, shakes) does not show yet: Play shows it in the game.
+- **Name plates from the game.** A face's plate shows the name the game gives that face, read from
+  the game's own code, so a face the game shows without a plate has none here either. Without the
+  game's code, the first word of the character's name stands in.
+- **The line limit per box.** A page's line count, in its field and on the stage, is checked
+  against the box its line uses: 4 lines, or 3 in the wide frames of a `page` line.
+- **For checks and agents,** `--do stage` draws the stage alone over the whole window; at
+  `--size 1024x768 --scale 1` it is the game's screen pixel for pixel.
+
 ## 0.2.0 (not released)
 
 Each kind of step with fields of its own, and a sketch of the stage.

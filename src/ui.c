@@ -1739,7 +1739,17 @@ static void stage_foot(const struct stage *sg, bool own_line, int *page)
 	}
 }
 
-/* The stage sketch at the top of the right side, for the selected step. */
+/* The stage's heading: the game's screen at the step, standing still. */
+static void stage_label(void)
+{
+	igTextUnformatted("Stage", NULL);
+	igSameLine(0, S(8));
+	igTextColored(colv(C_FAINT), "\xC2\xB7 the game's screen, without motion");
+	igSetItemTooltip("Drawn from the game's own pictures and font at the selected step.\n"
+	                 "Effects, slides and shakes do not show here yet: Play shows them in the game.");
+}
+
+/* The stage at the top of the right side, for the selected step. */
 static void stage_for_step(const cJSON *st)
 {
 	struct stage sg;
@@ -1764,6 +1774,22 @@ static void stage_for_step(const cJSON *st)
 		*page = 0;
 	stage_draw(&sg, *page, igGetContentRegionAvail().x);
 	stage_foot(&sg, own, page);
+}
+
+static bool stage_only;  /* --do stage */
+
+static void stage_alone(float w)
+{
+	const cJSON *st = sel_step(NULL, NULL);
+	struct stage sg;
+	memset(&sg, 0, sizeof sg);
+	if (st)
+		stage_walk(D.root, UI.sel, &sg);
+	int pages = sg.line ? line_pages(sg.line) : 0;
+	int page = sg.line == st ? fields_page : pages - 1;
+	if (page >= pages)
+		page = pages - 1;
+	stage_draw(&sg, page < 0 ? 0 : page, w);
 }
 
 static bool json_open;   /* the step's JSON shown under its fields */
@@ -1816,9 +1842,7 @@ static void right_side(void)
 		cast_side();
 		return;
 	}
-	igTextUnformatted("Stage", NULL);
-	igSameLine(0, S(8));
-	igTextColored(colv(C_FAINT), "\xC2\xB7 a sketch: Play shows it in the game");
+	stage_label();
 	cJSON *st = sel_step(NULL, NULL);
 	bool typing = strcmp(edit_buf, edit_src) != 0;
 	if (strcmp(edit_for, UI.sel) || edit_gen != doc_gen || (!typing && (edit_at != D.at || D.live)))
@@ -1866,9 +1890,7 @@ static void cast_side(void)
 {
 	cJSON *cast = cJSON_GetObjectItemCaseSensitive(D.root, "cast");
 	cJSON *e = cJSON_GetObjectItemCaseSensitive(cast, cast_sel);
-	igTextUnformatted("Stage", NULL);
-	igSameLine(0, S(8));
-	igTextColored(colv(C_FAINT), "\xC2\xB7 a sketch: Play shows it in the game");
+	stage_label();
 	char first[256];
 	int uses = e ? cast_uses(cast_sel, first, sizeof first) : 0;
 	struct stage sg;
@@ -2269,6 +2291,8 @@ bool ui_do(const char *action)
 		return cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(D.root, "cast"), arg) != NULL;
 	} else if (!strcmp(name, "castadd"))
 		cast_add();
+	else if (!strcmp(name, "stage"))
+		stage_only = true;
 	else if (!strcmp(name, "move")) {   /* move=FROM|LIST|INDEX, as a drop does it */
 		char from[256], list[256];
 		int index = 0;
@@ -2310,6 +2334,13 @@ void ui_frame(void)
 	igBegin("##root", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
 	        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse);
 	igPopStyleVar(2);
+	if (stage_only) {
+		/* --do stage: the stage alone over the whole window, to set beside the game's own shots
+		 * (with --size 1024x768, one pixel for one). */
+		stage_alone(io->DisplaySize.x);
+		igEnd();
+		return;
+	}
 
 	float top_h = S(54), tabs_h = S(38), status_h = S(28);
 	int n = problem_count();

@@ -1,6 +1,6 @@
 /* The game's pictures, music and names for the window.
  *
- * Small pictures in the list come from Rance Browser's thumbnail thread. The stage sketch draws whole
+ * Small pictures in the list come from Rance Browser's thumbnail thread. The stage draws whole
  * pictures: a CG of the game or a picture in the mod's folder (PNG, WebP, JPEG), read on the window's
  * thread a few a frame and kept while they are drawn. rq.ids gives a face's character and a track's
  * name; a track or a sound plays through Rance Browser's player. */
@@ -9,12 +9,16 @@
 #include <string.h>
 
 #include "system4.h"
+#include "system4/ain.h"
 #include "system4/cg.h"
 #include "system4/file.h"
+#include "system4/instructions.h"
+#include "system4/string.h"
+#include "system4/utfsjis.h"
 
 #include "editor.h"
 
-#define CACHE 48
+#define CACHE 96
 #define LOADS_PER_FRAME 3
 
 struct slot {
@@ -31,6 +35,7 @@ static int loads_left = LOADS_PER_FRAME;
 static bool waiting;     /* a picture wanted this frame is read next frame */
 static bool thumbs_on;
 static char mod_dir[1024];
+static void plates_load(void);
 
 struct face_of { int cg; const char *name; };
 static struct face_of faces[512];
@@ -60,6 +65,7 @@ void media_init(bool thumbs)
 		}
 	}
 	qsort(faces, (size_t)nfaces, sizeof *faces, face_cmp);
+	plates_load();
 }
 
 void media_frame(void)
@@ -128,19 +134,28 @@ static void load(struct slot *s)
 		cg_free(cg);
 }
 
+static struct picture none = { 0, 0, 0, PIC_FAILED };
+static const struct picture *picture_of(int no, const char *path);
+
 /* A picture value of a scene file: a CG number, or a path in the mod's folder. */
 const struct picture *media_picture(const cJSON *v)
 {
-	static struct picture none = { 0, 0, 0, PIC_FAILED };
-	int no = -1;
-	const char *path = NULL;
 	if (cJSON_IsNumber(v) && v->valuedouble >= 0)
-		no = (int)v->valuedouble;
-	else if (cJSON_IsString(v) && v->valuestring[0] && strchr(v->valuestring, '.'))
-		path = v->valuestring;
-	else
-		return &none;
-	if (no == 0)
+		return picture_of((int)v->valuedouble, NULL);
+	if (cJSON_IsString(v) && v->valuestring[0] && strchr(v->valuestring, '.'))
+		return picture_of(-1, v->valuestring);
+	return &none;
+}
+
+/* One of the game's CGs, as the game's own screens use them (the message box, its buttons). */
+const struct picture *media_cg(int no)
+{
+	return picture_of(no, NULL);
+}
+
+static const struct picture *picture_of(int no, const char *path)
+{
+	if (no == 0 || (!path && no < 0))
 		return &none;
 	struct slot *free_slot = NULL, *old = NULL;
 	for (int i = 0; i < CACHE; i++) {
@@ -212,10 +227,80 @@ const char *media_face_owner(int face)
 	return NULL;
 }
 
-/* The name the game's plate shows for a face: the first word of RQ MOD's name for its character
- * ("Magic" for Magic The Gandhi, as the game's own plate reads), or NULL. */
+/* ---- the game's name plates ---- */
+
+/* The game names a face on its plate from a table its code fills at the start, one call each:
+ * 顔登録(2000, "Rance", 1). The calls are read from the game's .ain: a CALLFUNC to 顔登録 after
+ * PUSH face, S_PUSH name, PUSH tone. */
+#define PLATE_FIRST 2000
+#define PLATES 1000
+static char *plates[PLATES];
+static bool plates_read;
+
+static char *to_utf8(const char *s)
+{
+	return sjis2utf(s, strlen(s));
+}
+
+static int32_t at32(const uint8_t *p)
+{
+	return (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24);
+}
+
+static int op_at(const uint8_t *p)
+{
+	return p[0] | p[1] << 8;
+}
+
+static void plates_load(void)
+{
+	for (int i = 0; i < PLATES; i++) {
+		free(plates[i]);
+		plates[i] = NULL;
+	}
+	plates_read = false;
+	if (!G.dir[0] || !G.code[0])
+		return;
+	char path[1400];
+	snprintf(path, sizeof path, "%s/%s.ain", G.dir, G.code);
+	int err = 0;
+	struct ain *ain = ain_open_conv(path, to_utf8, &err);
+	if (!ain)
+		return;
+	char name[] = "\xE9\xA1\x94\xE7\x99\xBB\xE9\x8C\xB2";   /* 顔登録 */
+	int fn = ain_get_function(ain, name);
+	int found = 0;
+	if (fn >= 0 && ain->code_size > 24) {
+		const uint8_t *c = ain->code;
+		for (size_t p = 18; p + 6 <= ain->code_size; p++) {
+			if (op_at(c + p) != CALLFUNC || at32(c + p + 2) != fn)
+				continue;
+			if (op_at(c + p - 6) != PUSH || op_at(c + p - 12) != S_PUSH || op_at(c + p - 18) != PUSH)
+				continue;
+			int face = at32(c + p - 16), str = at32(c + p - 10);
+			if (face < PLATE_FIRST || face >= PLATE_FIRST + PLATES || str < 0 || str >= ain->nr_strings)
+				continue;
+			free(plates[face - PLATE_FIRST]);
+			plates[face - PLATE_FIRST] = strdup(ain->strings[str]->text);
+			found++;
+		}
+	}
+	plates_read = found > 0;
+	ain_free(ain);
+}
+
+bool media_plates_known(void)
+{
+	return plates_read;
+}
+
+/* The name the game's plate shows for a face, as the game's table has it; NULL for a face the
+ * table leaves out (the game shows no plate then). Without the table (no .ain), the first word of
+ * RQ MOD's name for the face's character. */
 const char *media_face_name(int face)
 {
+	if (plates_read)
+		return face >= PLATE_FIRST && face < PLATE_FIRST + PLATES ? plates[face - PLATE_FIRST] : NULL;
 	static char ring[4][64];
 	static int at;
 	const char *who = media_face_owner(face);

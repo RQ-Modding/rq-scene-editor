@@ -1,12 +1,16 @@
-/* The stage sketch: the scene as the game shows it at a step, drawn small above the step's fields.
+/* The stage: the game's screen at a step, drawn from the game's own pieces at the game's places.
  *
  * The steps are followed from the file's start to the selected one (into the branch that holds it;
  * a branch passed on the way is not entered, a goto not followed): each picture step sets its
- * layer, a line goes into the message box. The box, the face's frame and the name plate are drawn
- * where the game puts them on its 1024 by 768 screen, and a page is laid out in the game's font as
- * the game lays it out: words that do not fit go to the next line, the lines after an opening
- * quote start under its first letter, and a page holds 4 lines (a 5th is drawn past the box, here
- * in red). Play shows the truth; this is a sketch. */
+ * layer as the game's call does (a scene CG, black and white clear the others; a set puts the
+ * game's mask wallpaper in), a line goes into the message box. Everything is drawn at the game's
+ * 1024 by 768, scaled: each layer at its part's place, by the parts' order (`画面表示.jaf`); the
+ * message frame of the line's kind with its name plate, the face in its frame, the click mark and
+ * AUTO, SKIP and CONFIG (`メッセージ枠.jaf`, `メッセージボタン.jaf`); a choice as the game's menu
+ * (`T_Select`). A page is laid out in the game's font as the game lays it out: words that do not
+ * fit go to the next line, an opening quote hangs left of where the lines start, and a line past
+ * the box's last is drawn in red. What moves (effects, slides, shakes) is not shown yet:
+ * the stage shows where each step ends. */
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
@@ -17,20 +21,34 @@
 
 #include "editor.h"
 
-/* The width a line of the box takes before the game breaks it, at 1024 by 768. Measured on the
- * game's shots of a long line: the first line held 611 pixels and not 715 with the next word, the
- * third (under the quote) 681 and not 740. */
-#define BOX_TEXT_W 700.0f
+/* The width a line of a frame-1 box takes from where its text starts before the game breaks it,
+ * in the window's measure of the game's font at BOX_TEXT_SIZE (an opening quote hangs left of it).
+ * Measured on the game's shots of a long line: the first line held 611 and not 715 with the next
+ * word from its quote, the third 681 and not 740 under the quote's 15. */
+#define BOX_TEXT_W 685.0f
 
-/* Dear ImGui sizes a font by its whole height, which is 1.362 times the em of the game's font: its
- * sizes here are the game's pixel sizes times this. */
-#define GAME_EM 1.362f
+/* Where the game's text starts against the place its frame registers (31,18 in frame 1, 43,7 in
+ * the E frames), in the window's measure: on the game's shots, a line's top at 586 draws its ink
+ * from 594, as Dear ImGui draws it from 3 lower. */
+#define TEXT_DX 0
+#define TEXT_DY (-3)
+
+/* Text the game draws at a size of its own, in the window's sizes. */
+#define GAME_SIZE_K (BOX_TEXT_SIZE / 40.0f)
 
 /* ---- following the steps ---- */
 
 static const cJSON *get(const cJSON *o, const char *k)
 {
 	return cJSON_IsObject(o) ? cJSON_GetObjectItemCaseSensitive(o, k) : NULL;
+}
+
+static void clear_layers(struct stage *s)
+{
+	for (int i = 0; i < L_COUNT; i++)
+		s->layer[i] = NULL;
+	s->mask_cg = 0;
+	s->screen = 0;
 }
 
 static void apply(struct stage *s, const cJSON *st)
@@ -41,7 +59,6 @@ static void apply(struct stage *s, const cJSON *st)
 	const cJSON *v = get(st, kind);
 	if (!strcmp(kind, "background") || !strcmp(kind, "background_in")) {
 		s->layer[L_BG] = v;
-		s->screen = 0;
 	} else if (!strcmp(kind, "background_out")) {
 		s->layer[L_BG] = NULL;
 	} else if (!strcmp(kind, "wallpaper")) {
@@ -49,27 +66,32 @@ static void apply(struct stage *s, const cJSON *st)
 		s->screen = 0;
 	} else if (!strcmp(kind, "mask_wallpaper")) {
 		s->layer[L_MASK] = v;
+		s->mask_cg = 0;
 	} else if (!strcmp(kind, "portrait")) {
 		s->layer[L_PORTRAIT] = v;
 	} else if (!strcmp(kind, "mini")) {
 		s->layer[L_MINI] = v;
 	} else if (!strcmp(kind, "cg")) {
+		/* イベントＣＧ表示 clears the screen first. */
+		clear_layers(s);
 		s->layer[L_CG] = v;
-		s->screen = 0;
 	} else if (!strcmp(kind, "set")) {
+		/* セット表示: the four layers (none where 0 or left out), no scene CG unless the set
+		 * names one, and the game's mask wallpaper 5550. */
 		static const char *const keys[] = { "wallpaper", "background", "portrait", "mini", "cg" };
 		static const int layers[] = { L_WALL, L_BG, L_PORTRAIT, L_MINI, L_CG };
 		for (int i = 0; i < 5; i++)
 			s->layer[layers[i]] = get(v, keys[i]);
-		s->screen = 0;
-	} else if (!strcmp(kind, "black")) {
-		s->screen = 'b';
-	} else if (!strcmp(kind, "white")) {
-		s->screen = 'w';
+		s->layer[L_MASK] = NULL;
+		s->mask_cg = 5550;
+		if (s->layer[L_WALL])
+			s->screen = 0;
+	} else if (!strcmp(kind, "black") || !strcmp(kind, "white")) {
+		/* 黒画面, 白画面: the screen cleared to one colour. */
+		clear_layers(s);
+		s->screen = kind[0] == 'b' ? 'b' : 'w';
 	} else if (!strcmp(kind, "clear")) {
-		for (int i = 0; i < L_COUNT; i++)
-			s->layer[i] = NULL;
-		s->screen = 0;
+		clear_layers(s);
 		s->line = NULL;
 	} else if (!strcmp(kind, "say") || !strcmp(kind, "think") || !strcmp(kind, "narrate")) {
 		s->line = st;
@@ -209,6 +231,59 @@ const char *line_plate(const cJSON *line, const cJSON *cast, bool *game)
 	return NULL;
 }
 
+/* ---- the game's message frames ---- */
+
+/* The frames the game registers (メッセージ枠登録) and what goes with each. */
+struct frame {
+	int cg, x, y;     /* the frame's CG at x, y (z 8101) */
+	int tx, ty;       /* where the frame's text is registered, from the frame */
+	int text_w;       /* the text's width the game registers */
+	int lines;        /* the lines its box holds */
+	int r, g, b;      /* the text's colour */
+	bool edge;        /* a 1 pixel black edge round each letter */
+	int plate;        /* the name plate: 1 at 216,526, 2 at 3,596, 0 none */
+	int mark;         /* the click mark: 1 at 960,709, 2 at 930,725 */
+	int buttons;      /* AUTO, SKIP, CONFIG at x 966: 1 from y 600 every 40, 2 from 656 every 30 */
+};
+
+static const struct frame frames[9] = {
+	[1] = { 50011, 216, 568, 31, 18, 772, 4, 255, 255, 255, false, 1, 1, 1 },
+	[2] = { 50012, 216, 568, 31, 18, 772, 4, 255, 255, 224, false, 1, 1, 1 },
+	[3] = { 50013, 216, 568, 31, 18, 772, 4, 255, 255, 255, false, 0, 1, 1 },
+	[4] = { 50013, 216, 568, 31, 13, 772, 4, 255, 255, 255, true, 0, 1, 1 },
+	[6] = { 50016, 3, 638, 43, 7, 974, 3, 255, 255, 255, false, 2, 2, 2 },
+	[7] = { 50017, 3, 638, 43, 7, 974, 3, 255, 255, 224, false, 2, 2, 2 },
+	[8] = { 50018, 3, 638, 43, 7, 974, 3, 255, 255, 255, false, 0, 2, 2 },
+};
+
+int line_frame(const cJSON *line)
+{
+	const char *kind = step_kind(line);
+	if (!kind)
+		return 0;
+	bool page = cJSON_IsTrue(get(line, "page"));
+	if (!strcmp(kind, "say"))
+		return page ? 6 : 1;
+	if (!strcmp(kind, "think"))
+		return page ? 7 : 2;
+	if (!strcmp(kind, "narrate"))
+		return cJSON_IsTrue(get(line, "paper")) ? 4 : page ? 8 : 3;
+	return 0;
+}
+
+int line_limit(const cJSON *line)
+{
+	int f = line_frame(line);
+	return f ? frames[f].lines : 4;
+}
+
+/* The width a line of the frame takes before the game breaks it: frame 1's, measured, in the
+ * proportion of the widths the game registers. */
+static float frame_room(const struct frame *f)
+{
+	return BOX_TEXT_W * (float)f->text_w / 772.0f;
+}
+
 /* ---- laying out a page ---- */
 
 #define MAX_LAID 32
@@ -216,7 +291,7 @@ const char *line_plate(const cJSON *line, const cJSON *cast, bool *game)
 struct laid {
 	int n;
 	const char *a[MAX_LAID], *b[MAX_LAID];   /* each line's text */
-	float indent;                            /* the lines after the first start this far in */
+	float indent;                            /* the opening quote's width: it hangs left of the text */
 };
 
 static float tw(const char *a, const char *b)
@@ -238,7 +313,8 @@ static int utf8_len(const char *p)
 	return 1;
 }
 
-/* An opening quote: the game starts the next lines under the letter after it. */
+/* An opening quote: the game hangs it left of where the text starts, so every line of the page
+ * starts at the same place. */
 static int opening_quote(const char *s)
 {
 	static const char *const q[] = { "\xE2\x80\x9C", "\"", "\xE3\x80\x8C", "\xE3\x80\x8E", "\xE2\x80\x98", "(", "\xEF\xBC\x88" };
@@ -248,7 +324,7 @@ static int opening_quote(const char *s)
 	return 0;
 }
 
-static void lay(const char *page, struct laid *L)
+static void lay(const char *page, float width, struct laid *L)
 {
 	memset(L, 0, sizeof *L);
 	int q = opening_quote(page);
@@ -260,7 +336,7 @@ static void lay(const char *page, struct laid *L)
 		/* One paragraph: as many words as fit on each line. */
 		const char *a = p;
 		do {
-			float room = BOX_TEXT_W - (L->n ? L->indent : 0);
+			float room = width + (L->n ? 0 : L->indent);
 			const char *fit = a, *c = a;
 			while (c < end) {
 				const char *w = c;
@@ -297,110 +373,294 @@ static void lay(const char *page, struct laid *L)
 	}
 }
 
-int page_lines(const char *page)
+/* A page as the game shows it: its box draws a typed apostrophe as a closing quote (’), as the
+ * game's shots show it ("game’s"), though the font's own apostrophe is straight. In a buffer of
+ * its own, kept until the next call. */
+static const char *as_shown(const char *page)
+{
+	static char *buf;
+	static size_t cap;
+	size_t n = 0;
+	for (const char *p = page; *p; p++)
+		n += *p == '\'' ? 3 : 1;
+	if (n + 1 > cap) {
+		cap = n + 64;
+		buf = realloc(buf, cap);
+	}
+	char *o = buf;
+	for (const char *p = page; *p; p++) {
+		if (*p == '\'') {
+			memcpy(o, "\xE2\x80\x99", 3);
+			o += 3;
+		} else {
+			*o++ = *p;
+		}
+	}
+	*o = 0;
+	return buf;
+}
+
+int page_lines(const cJSON *line, const char *page)
 {
 	if (!page)
 		return 0;
+	int f = line_frame(line);
 	struct laid L;
-	lay(page, &L);
+	lay(as_shown(page), frame_room(&frames[f ? f : 1]), &L);
 	return L.n;
 }
 
-/* ---- drawing ---- */
+/* ---- drawing at the game's places ---- */
+
+struct pen {
+	ImDrawList *dl;
+	V2 o;      /* the screen's top left */
+	float k;   /* window pixels to a game pixel */
+};
+
+static V2 at(const struct pen *P, float x, float y)
+{
+	return v2(P->o.x + x * P->k, P->o.y + y * P->k);
+}
 
 static ImU32 rgba(int r, int g, int b, float a)
 {
 	return IM_COL32(r, g, b, (int)(a * 255 + 0.5f));
 }
 
-/* A picture into a box: cover (fills it, cut to the top when top is set) or contain. */
-static void picture_in(ImDrawList *dl, const cJSON *v, V2 a, V2 b, bool cover, bool top, float round)
+/* A picture at the game's place x, y, at its own size. */
+static void pic(const struct pen *P, const struct picture *p, float x, float y)
 {
-	const struct picture *p = media_picture(v);
 	if (p->state != PIC_READY)
 		return;
-	float bw = b.x - a.x, bh = b.y - a.y;
-	float sx = bw / p->w, sy = bh / p->h;
-	float s = cover ? fmaxf(sx, sy) : fminf(sx, sy);
-	float dw = p->w * s, dh = p->h * s;
-	if (cover) {
-		/* The part of the picture inside the box, in UVs. */
-		float u0 = (dw - bw) / 2 / dw, u1 = 1 - u0;
-		float v0 = top ? 0 : (dh - bh) / 2 / dh, v1 = v0 + bh / dh;
-		ImDrawList_AddImageRounded(dl, texref(p->tex), a, b, v2(u0, v0), v2(u1, v1), IM_COL32_WHITE, round, 0);
-	} else {
-		V2 c = v2(a.x + (bw - dw) / 2, a.y + (bh - dh) / 2);
-		ImDrawList_AddImage(dl, texref(p->tex), c, v2(c.x + dw, c.y + dh), v2(0, 0), v2(1, 1), IM_COL32_WHITE);
+	ImDrawList_AddImage(P->dl, texref(p->tex), at(P, x, y), at(P, x + p->w, y + p->h), v2(0, 0), v2(1, 1), IM_COL32_WHITE);
+}
+
+/* Part of a picture (sx, sy, sw, sh in its pixels) at the game's place x, y. */
+static void pic_part(const struct pen *P, const struct picture *p, float sx, float sy, float sw, float sh, float x, float y)
+{
+	if (p->state != PIC_READY || p->w <= 0 || p->h <= 0)
+		return;
+	V2 uv0 = v2(sx / p->w, sy / p->h), uv1 = v2((sx + sw) / p->w, (sy + sh) / p->h);
+	ImDrawList_AddImage(P->dl, texref(p->tex), at(P, x, y), at(P, x + sw, y + sh), uv0, uv1, IM_COL32_WHITE);
+}
+
+static void layer(const struct pen *P, const cJSON *v, float x, float y)
+{
+	if (v)
+		pic(P, media_picture(v), x, y);
+}
+
+/* Text in the game's font at the game's size `size`, its top left at x, y, `space` game pixels
+ * between letters (the game's 字間隔), drawn twice a pixel apart for the game's bold. */
+static float text_width(float size, float space, const char *s)
+{
+	float w = 0;
+	int n = 0;
+	for (const char *c = s; *c; c += utf8_len(c), n++)
+		w += ImFont_CalcTextSizeA(F_GAME, size * GAME_SIZE_K, FLT_MAX, 0, c, c + utf8_len(c), NULL).x;
+	return w + (n > 1 ? (n - 1) * space : 0);
+}
+
+static void game_text(const struct pen *P, float size, float space, bool bold, float x, float y, ImU32 ink, const char *s)
+{
+	float fs = size * GAME_SIZE_K;
+	for (const char *c = s; *c; c += utf8_len(c)) {
+		const char *e = c + utf8_len(c);
+		ImDrawList_AddText_FontPtr(P->dl, F_GAME, fs * P->k, at(P, x, y), ink, c, e, 0, NULL);
+		if (bold)
+			ImDrawList_AddText_FontPtr(P->dl, F_GAME, fs * P->k, at(P, x + 1, y), ink, c, e, 0, NULL);
+		x += ImFont_CalcTextSizeA(F_GAME, fs, FLT_MAX, 0, c, e, NULL).x + space;
 	}
 }
 
-/* A picture at the game's own size (k: screen pixels per game pixel), centred at x, its bottom at y. */
-static void picture_at(ImDrawList *dl, const cJSON *v, float x, float y, float k, bool centre_y)
+/* The name plate (T_MessageName::createSp): CG 50007, the name centred on it in size 26, made
+ * smaller down to 12 until it fits 212 pixels, yellow, bold, its letters 3 closer, which with its
+ * bold measures 1.25 closer here ("Magic" 51 pixels wide on the game's shots). */
+#define PLATE_SPACE (-1.25f)
+static void plate(const struct pen *P, int type, const char *name)
 {
-	const struct picture *p = media_picture(v);
-	if (p->state != PIC_READY)
+	float px = type == 2 ? 3 : 216, py = type == 2 ? 596 : 526;
+	const struct picture *p = media_cg(50007);
+	pic(P, p, px, py);
+	if (!name || !name[0] || p->state != PIC_READY)
 		return;
-	float dw = p->w * k, dh = p->h * k;
-	V2 a = v2(x - dw / 2, centre_y ? y - dh / 2 : y - dh);
-	ImDrawList_AddImage(dl, texref(p->tex), a, v2(a.x + dw, a.y + dh), v2(0, 0), v2(1, 1), IM_COL32_WHITE);
+	float size = 26;
+	while (size > 12 && text_width(size, PLATE_SPACE, name) > 212)
+		size -= 1;
+	float w = text_width(size, PLATE_SPACE, name);
+	float h = size * GAME_SIZE_K;
+	ImDrawList_PushClipRect(P->dl, at(P, px, py), at(P, px + p->w, py + p->h), true);
+	game_text(P, size, PLATE_SPACE, true, px + (p->w - w) / 2, py + (p->h - h) / 2, IM_COL32(255, 245, 100, 255), name);
+	ImDrawList_PopClipRect(P->dl);
 }
 
-static void frame_rect(ImDrawList *dl, V2 a, V2 b, ImU32 c, float th, float round)
+static void message(const struct pen *P, const struct stage *s, int page)
 {
-	ImDrawList_AddRect(dl, v2(a.x - th / 2, a.y - th / 2), v2(b.x + th / 2, b.y + th / 2), c, round, th, 0);
+	/* No frame until a line (and none after clear_text, the game's 枠消去). */
+	if (!s->line)
+		return;
+	int fno = line_frame(s->line);
+	if (!fno)
+		fno = 1;
+	const struct frame *f = &frames[fno];
+	const char *kind = s->line ? step_kind(s->line) : NULL;
+	bool talk = kind && (!strcmp(kind, "say") || !strcmp(kind, "think"));
+
+	/* The frame (z 8101), the plate (8102), the face (8201) in its frame (8211), the buttons (8301). */
+	pic(P, media_cg(f->cg), f->x, f->y);
+	if (talk && f->plate) {
+		bool game = false;
+		const char *name = s->line_name ? s->line_name : line_plate(s->line, s->cast, &game);
+		if (name && name[0])
+			plate(P, f->plate, name);
+	}
+	/* The face shows in frames 1 and 2 only: the game draws none in the E frames. */
+	const cJSON *face = talk && fno <= 2 ? line_face(s->line, s->cast) : NULL;
+	if (face) {
+		layer(P, face, 12, 523);
+		pic(P, media_cg(50006), 0, 511);
+	}
+	static const int button_cg[3] = { 50033, 50036, 50039 };
+	for (int i = 0; i < 3; i++)
+		pic(P, media_cg(button_cg[i]), 966, f->buttons == 2 ? 656 + 30 * i : 600 + 40 * i);
+
+	/* The page; while a choice shows, the game's box stays with its plate and no text. */
+	const char *text = s->line && !s->choice ? line_page(s->line, page) : NULL;
+	if (!text)
+		return;
+	text = as_shown(text);
+	struct laid L;
+	lay(text, frame_room(f), &L);
+	float k = P->k, size = BOX_TEXT_SIZE * k;
+	float tx = f->x + f->tx + TEXT_DX, ty = f->y + f->ty + TEXT_DY;
+	ImU32 ink = IM_COL32(f->r, f->g, f->b, 255), bad = rgba(0xff, 0x8a, 0x73, 1);
+	for (int i = 0; i < L.n; i++) {
+		bool over = i >= f->lines;
+		V2 a = at(P, tx - (i ? 0 : L.indent), ty + i * BOX_LINE_H);
+		if (f->edge && !over) {
+			static const int d[8][2] = { { -1, -1 }, { 0, -1 }, { 1, -1 }, { -1, 0 }, { 1, 0 }, { -1, 1 }, { 0, 1 }, { 1, 1 } };
+			for (int j = 0; j < 8; j++)
+				ImDrawList_AddText_FontPtr(P->dl, F_GAME, size, v2(a.x + d[j][0] * k, a.y + d[j][1] * k), IM_COL32(0, 0, 0, 255),
+				                           L.a[i], L.b[i], 0, NULL);
+		}
+		ImDrawList_AddText_FontPtr(P->dl, F_GAME, size, a, over ? bad : ink, L.a[i], L.b[i], 0, NULL);
+		if (over) {
+			/* Past the box: the game draws it there; the editor marks it. */
+			float uy = a.y + size * 0.86f;
+			ImDrawList_AddLine(P->dl, v2(a.x, uy), v2(a.x + tw(L.a[i], L.b[i]) * k, uy), bad, fmaxf(1, k * 2));
+		}
+	}
+	/* The click mark, after the page (its first picture of five). */
+	if (L.n <= f->lines)
+		pic(P, media_cg(50021), f->mark == 2 ? 930 : 960, f->mark == 2 ? 725 : 709);
 }
 
-static void choice_rows(ImDrawList *dl, const cJSON *choice, V2 o, float w, float H)
+/* ---- the choice menu (T_Select) ---- */
+
+/* The space before a row, by the row above it (T_Select::getSpace, as RQ MOD's kit has it). */
+static int menu_space(char kind, char prev)
+{
+	if (!prev)
+		return 8;
+	if (prev == 'b')
+		return 6;
+	if (prev == 't')
+		return kind == 't' ? 0 : 8;
+	return kind == 's' ? 1 : 6;
+}
+
+static const char *row_text(const cJSON *r)
+{
+	if (cJSON_IsString(r))
+		return r->valuestring;
+	const cJSON *t = get(r, "text");
+	return cJSON_IsString(t) ? t->valuestring : "";
+}
+
+static bool is_sep(const cJSON *r)
+{
+	return cJSON_IsString(r) && !strcmp(r->valuestring, "-");
+}
+
+/* The menu as the game builds it: the base 10021 cut to the rows' height and its last 6 lines,
+ * buttons 10022 (10029, taller, when fewer than 3 rows can be picked) at 18 in, separators 10023 at
+ * 4 in; at the step's x, y, else the game's 300,360, moved up when it would run past the bottom. */
+static void menu(const struct pen *P, const cJSON *choice)
 {
 	const cJSON *rows = get(choice, "choice");
-	float x0 = o.x + w * 0.17f, x1 = o.x + w * 0.83f;
-	float y = o.y + H * 0.15f;
-	float size = w * 0.026f * GAME_EM, rh = w * 0.052f, gap = w * 0.012f;
-	if (!cJSON_IsArray(rows)) {
-		const char *msg = "Rows from the mod's function";
-		float mw = ImFont_CalcTextSizeA(F_GAME, size, FLT_MAX, 0, msg, NULL, NULL).x;
-		ImDrawList_AddRectFilled(dl, v2(x0, y), v2(x1, y + rh), rgba(14, 30, 24, 0.9f), w * 0.006f, 0);
-		ImDrawList_AddText_FontPtr(dl, F_GAME, size, v2((x0 + x1 - mw) / 2, y + (rh - size) / 2), rgba(255, 255, 255, 0.7f),
-		                           msg, NULL, 0, NULL);
-		return;
+	static cJSON *fn_row;
+	if (!fn_row)
+		fn_row = cJSON_CreateString("Rows from the mod's function");
+	int n = cJSON_IsArray(rows) ? cJSON_GetArraySize(rows) : 1;
+	int picks = 0;
+	for (int i = 0; i < n; i++) {
+		const cJSON *r = cJSON_IsArray(rows) ? cJSON_GetArrayItem(rows, i) : fn_row;
+		if (!is_sep(r))
+			picks++;
 	}
-	for (const cJSON *r = rows->child; r && y < o.y + H * 0.7f; r = r->next) {
-		if (cJSON_IsString(r) && !strcmp(r->valuestring, "-")) {
-			ImDrawList_AddRectFilled(dl, v2(x0 + (x1 - x0) * 0.1f, y), v2(x1 - (x1 - x0) * 0.1f, y + w * 0.003f),
-			                         rgba(183, 178, 143, 0.6f), 0, 0);
-			y += w * 0.003f + gap;
+	bool large = picks < 3;
+	int bh = large ? 60 : 27;
+	int h = 0;
+	char prev = 0;
+	for (int i = 0; i < n; i++) {
+		const cJSON *r = cJSON_IsArray(rows) ? cJSON_GetArrayItem(rows, i) : fn_row;
+		char kind = is_sep(r) ? 's' : 'b';
+		h += menu_space(kind, prev) + (kind == 'b' ? bh : 7);
+		prev = kind;
+	}
+	if (prev)
+		h += menu_space(0, prev);
+	if (h > 762)
+		h = 762;
+	const cJSON *jx = get(choice, "x"), *jy = get(choice, "y");
+	int x = 300, y = 360;
+	if (cJSON_IsNumber(jx)) {
+		x = (int)jx->valuedouble;
+		y = cJSON_IsNumber(jy) ? (int)jy->valuedouble : 360;
+	}
+	if (x < 0)
+		x = (1024 - 376) / 2;
+	if (y < 0)
+		y = (768 - (h + 6 - 4)) / 2;
+	else if (y > 768 - 6 - h)
+		y = 768 - 6 - h > 0 ? 768 - 6 - h : 0;   /* RQ MOD moves a long menu up (2.56.0) */
+
+	const struct picture *base = media_cg(10021);
+	pic_part(P, base, 0, 0, 380, (float)h, (float)x, (float)y);
+	pic_part(P, base, 0, 762, 380, 6, (float)x, (float)(y + h));
+	const struct picture *btn = media_cg(large ? 10029 : 10022), *sep = media_cg(10023);
+	float size = large ? 24 : 20;
+	int at_y = 0;
+	prev = 0;
+	for (int i = 0; i < n; i++) {
+		const cJSON *r = cJSON_IsArray(rows) ? cJSON_GetArrayItem(rows, i) : fn_row;
+		char kind = is_sep(r) ? 's' : 'b';
+		at_y += menu_space(kind, prev);
+		prev = kind;
+		if (at_y >= h)
+			break;
+		if (kind == 's') {
+			pic(P, sep, (float)(x + 4), (float)(y + at_y));
+			at_y += 7;
 			continue;
 		}
-		const char *text = cJSON_IsString(r) ? r->valuestring : NULL;
-		const cJSON *t = get(r, "text");
-		if (cJSON_IsString(t))
-			text = t->valuestring;
-		ImU32 ink = rgba(255, 255, 255, 1);
-		const cJSON *cr = get(r, "r"), *cg = get(r, "g"), *cb = get(r, "b");
-		if (cJSON_IsNumber(cr) || cJSON_IsNumber(cg) || cJSON_IsNumber(cb))
-			ink = IM_COL32(cJSON_IsNumber(cr) ? (int)cr->valuedouble : 255, cJSON_IsNumber(cg) ? (int)cg->valuedouble : 255,
-			               cJSON_IsNumber(cb) ? (int)cb->valuedouble : 255, 255);
-		ImDrawList_AddRectFilled(dl, v2(x0, y), v2(x1, y + rh), rgba(14, 30, 24, 0.9f), w * 0.006f, 0);
-		frame_rect(dl, v2(x0, y), v2(x1, y + rh), rgba(183, 178, 143, 1), fmaxf(1, w * 0.0025f), w * 0.006f);
-		if (text) {
-			float tw2 = ImFont_CalcTextSizeA(F_GAME, size, FLT_MAX, 0, text, NULL, NULL).x;
-			float tx = (x0 + x1 - tw2) / 2;
-			if (tx < x0 + size)
-				tx = x0 + size;
-			ImDrawList_PushClipRect(dl, v2(x0, y), v2(x1, y + rh), true);
-			ImDrawList_AddText_FontPtr(dl, F_GAME, size, v2(tx, y + (rh - size) / 2), ink, text, NULL, 0, NULL);
-			ImDrawList_PopClipRect(dl);
+		pic_part(P, btn, 0, 0, 340, (float)bh, (float)(x + 18), (float)(y + at_y));
+		const char *text = row_text(r);
+		int cr = 196, cg = 196, cb = 196;
+		const cJSON *jr = get(r, "r"), *jg = get(r, "g"), *jb = get(r, "b");
+		if (cJSON_IsNumber(jr) || cJSON_IsNumber(jg) || cJSON_IsNumber(jb)) {
+			cr = cJSON_IsNumber(jr) ? (int)jr->valuedouble : 196;
+			cg = cJSON_IsNumber(jg) ? (int)jg->valuedouble : 196;
+			cb = cJSON_IsNumber(jb) ? (int)jb->valuedouble : 196;
 		}
-		if (get(r, "if")) {
-			float ms = w * 0.015f;
-			const char *m = "if";
-			float mw = ImFont_CalcTextSizeA(F_BOLD, ms, FLT_MAX, 0, m, NULL, NULL).x;
-			V2 ma = v2(x1 - w * 0.012f - mw - w * 0.016f, y + (rh - ms * 1.6f) / 2);
-			V2 mb = v2(x1 - w * 0.012f, ma.y + ms * 1.6f);
-			frame_rect(dl, ma, mb, rgba(201, 232, 176, 1), fmaxf(1, w * 0.0015f), w * 0.004f);
-			ImDrawList_AddText_FontPtr(dl, F_BOLD, ms, v2(ma.x + w * 0.008f, ma.y + ms * 0.3f), rgba(201, 232, 176, 1), m, NULL, 0, NULL);
-		}
-		y += rh + gap;
+		float ts = size;
+		while (ts > 12 && text_width(ts, 0, text) > 340 - 12)
+			ts -= 1;
+		float w = text_width(ts, 0, text);
+		float th = ts * GAME_SIZE_K;
+		game_text(P, ts, 0, false, x + 18 + (340 - w) / 2, y + at_y + (bh - th) / 2, IM_COL32(cr, cg, cb, 255), text);
+		at_y += bh;
 	}
 }
 
@@ -411,91 +671,28 @@ void stage_draw(const struct stage *s, int page, float w)
 	o.x = floorf(o.x);
 	o.y = floorf(o.y);
 	float H = floorf(w * 0.75f);
-	float k = w / 1024.0f;
+	struct pen P = { dl, o, w / 1024.0f };
 	V2 end = v2(o.x + w, o.y + H);
 	ImDrawList_PushClipRect(dl, o, end, true);
 
-	/* The wall: the wallpaper, else the game's green. */
-	ImDrawList_AddRectFilledMultiColor(dl, o, end, rgba(0x2b, 0x4a, 0x37, 1), rgba(0x1d, 0x33, 0x26, 1),
-	                                   rgba(0x0f, 0x1d, 0x15, 1), rgba(0x1d, 0x33, 0x26, 1));
-	if (s->layer[L_WALL])
-		picture_in(dl, s->layer[L_WALL], o, end, true, false, 0);
+	/* The screen's colour, then the layers by their z: the wallpaper (8001), the mask wallpaper
+	 * (8011), the scene CG (8021), the background at 0,39 (8031), the small CG at 513,271 (8041),
+	 * the standing picture (8051). */
+	ImU32 base = s->screen == 'w' ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 255);
+	ImDrawList_AddRectFilled(dl, o, end, base, 0, 0);
+	layer(&P, s->layer[L_WALL], 0, 0);
+	if (s->layer[L_MASK])
+		layer(&P, s->layer[L_MASK], 0, 0);
+	else if (s->mask_cg > 0)
+		pic(&P, media_cg(s->mask_cg), 0, 0);
+	layer(&P, s->layer[L_CG], 0, 0);
+	layer(&P, s->layer[L_BG], 0, 39);
+	layer(&P, s->layer[L_MINI], 513, 271);
+	layer(&P, s->layer[L_PORTRAIT], 0, 0);
 
-	/* The background in its frame. */
-	V2 ba = v2(o.x + w * 0.022f, o.y + H * 0.065f), bb = v2(ba.x + w * 0.956f, ba.y + H * 0.58f);
-	if (s->layer[L_BG]) {
-		frame_rect(dl, ba, bb, rgba(0x3b, 0x4a, 0x3a, 1), w * 0.009f, w * 0.015f);
-		frame_rect(dl, ba, bb, rgba(0xb7, 0xb2, 0x8f, 1), w * 0.005f, w * 0.015f);
-		picture_in(dl, s->layer[L_BG], ba, bb, true, false, w * 0.015f);
-	}
-	if (s->layer[L_MINI])
-		picture_at(dl, s->layer[L_MINI], (ba.x + bb.x) / 2, (ba.y + bb.y) / 2, k, true);
-	if (s->layer[L_PORTRAIT])
-		picture_at(dl, s->layer[L_PORTRAIT], o.x + w / 2, o.y + H * 0.745f, k, false);
-	if (s->layer[L_CG])
-		picture_in(dl, s->layer[L_CG], o, end, false, false, 0);
-	if (s->screen)
-		ImDrawList_AddRectFilled(dl, o, end, s->screen == 'w' ? rgba(250, 250, 250, 0.96f) : rgba(0, 0, 0, 0.96f), 0, 0);
-
-	/* The message box, the face and the plate. */
-	const char *kind = s->line ? step_kind(s->line) : NULL;
-	bool narr = kind && !strcmp(kind, "narrate");
-	bool paper = narr && cJSON_IsTrue(get(s->line, "paper"));
-	V2 xa = v2(o.x + w * 0.213f, o.y + H * 0.745f), xb = v2(xa.x + w * 0.725f, xa.y + H * 0.23f);
-	ImDrawList_AddRectFilled(dl, xa, xb, paper ? rgba(0xe9, 0xdf, 0xc4, 0.95f) : rgba(22, 48, 46, 0.86f), w * 0.006f, 0);
-	frame_rect(dl, xa, xb, rgba(0x8d, 0x8a, 0x70, 1), fmaxf(1, w * 0.0025f), w * 0.006f);
-	static const char *const side[] = { "AUTO", "SKIP", "CONFIG" };
-	float ss = w * 0.0145f;
-	for (int i = 0; i < 3; i++)
-		ImDrawList_AddText_FontPtr(dl, F_BOLD, ss, v2(o.x + w * 0.946f, o.y + H * 0.77f + i * (ss + w * 0.013f)),
-		                           rgba(0xbf, 0xe9, 0xb6, 1), side[i], NULL, 0, NULL);
-	if (s->line && !narr) {
-		const cJSON *face = line_face(s->line, s->cast);
-		if (face) {
-			V2 fa = v2(o.x + w * 0.012f, o.y + H * 0.682f), fb = v2(fa.x + w * 0.191f, fa.y + H * 0.302f);
-			frame_rect(dl, fa, fb, rgba(0x2d, 0x24, 0x14, 1), w * 0.008f, w * 0.006f);
-			frame_rect(dl, fa, fb, rgba(0xb5, 0x9a, 0x5c, 1), w * 0.0045f, w * 0.006f);
-			ImDrawList_AddRectFilled(dl, fa, fb, rgba(0x1d, 0x2a, 0x22, 1), w * 0.006f, 0);
-			picture_in(dl, face, fa, fb, true, true, w * 0.006f);
-		}
-		bool game = false;
-		const char *plate = s->line_name ? s->line_name : line_plate(s->line, s->cast, &game);
-		V2 pa = v2(o.x + w * 0.213f, o.y + H * 0.688f), pb = v2(pa.x + w * 0.213f, pa.y + H * 0.049f);
-		ImDrawList_AddRectFilled(dl, pa, pb, rgba(18, 40, 32, 0.88f), w * 0.005f, 0);
-		frame_rect(dl, pa, pb, rgba(0x8d, 0x8a, 0x70, 1), fmaxf(1, w * 0.0025f), w * 0.005f);
-		if (plate) {
-			float ps = w * 0.0195f * GAME_EM;   /* the game's plate: 20 pixels */
-			float pw = ImFont_CalcTextSizeA(F_GAME, ps, FLT_MAX, 0, plate, NULL, NULL).x;
-			ImDrawList_PushClipRect(dl, pa, pb, true);
-			ImDrawList_AddText_FontPtr(dl, F_GAME, ps, v2((pa.x + pb.x - pw) / 2, pa.y + (pb.y - pa.y - ps) / 2),
-			                           rgba(0xf1, 0xe2, 0x7a, game ? 0.75f : 1), plate, NULL, 0, NULL);
-			ImDrawList_PopClipRect(dl);
-		}
-	}
-
-	/* The page. */
-	const char *text = s->line ? line_page(s->line, page) : NULL;
-	if (text) {
-		struct laid L;
-		lay(text, &L);
-		float size = BOX_TEXT_SIZE * k, lh = BOX_LINE_H * k;
-		float tx = o.x + w * 0.227f, ty = o.y + H * 0.762f;
-		ImU32 ink = paper ? rgba(0x2a, 0x22, 0x16, 1) : rgba(255, 255, 255, 1);
-		for (int i = 0; i < L.n; i++) {
-			bool over = i >= 4;
-			V2 at = v2(tx + (i ? L.indent * k : 0), ty + i * lh);
-			if (!paper && !over)
-				ImDrawList_AddText_FontPtr(dl, F_GAME, size, v2(at.x, at.y + k * 2), rgba(0, 0, 0, 0.6f), L.a[i], L.b[i], 0, NULL);
-			ImDrawList_AddText_FontPtr(dl, F_GAME, size, at, over ? rgba(0xff, 0x8a, 0x73, 1) : ink, L.a[i], L.b[i], 0, NULL);
-			if (over) {
-				float lw = tw(L.a[i], L.b[i]) * k;
-				float uy = at.y + size * 0.86f;   /* under the baseline */
-				ImDrawList_AddLine(dl, v2(at.x, uy), v2(at.x + lw, uy), rgba(0xff, 0x8a, 0x73, 1), fmaxf(1, k * 2));
-			}
-		}
-	}
+	message(&P, s, page);
 	if (s->choice)
-		choice_rows(dl, s->choice, o, w, H);
+		menu(&P, s->choice);
 	ImDrawList_PopClipRect(dl);
 	ImDrawList_AddRect(dl, o, end, col(C_BORDER), S(4), S(1), 0);
 	igDummy(v2(w, H));

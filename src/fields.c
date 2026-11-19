@@ -513,15 +513,15 @@ static void pages_field(cJSON *o, const char *k)
 	for (int i = 0; i < n; i++) {
 		const char *page = cJSON_IsArray(t) ? (cJSON_IsString(cJSON_GetArrayItem(t, i)) ? cJSON_GetArrayItem(t, i)->valuestring : "")
 		                                    : (cJSON_IsString(t) ? t->valuestring : "");
-		int lines = page_lines(page);
+		int lines = page_lines(o, page), most = line_limit(o);
 		igPushID_Int(i);
 		igTextUnformatted("Page", NULL);
 		igSameLine(0, S(4));
 		igText("%d", i + 1);
 		igSameLine(0, S(6));
 		igPushFont(NULL, 14);
-		igTextColored(colv(lines > 4 ? C_BAD : C_FAINT), "\xC2\xB7 %d line%s of 4%s", lines, lines == 1 ? "" : "s",
-		              lines > 4 ? ": the game draws the rest past the box" : "");
+		igTextColored(colv(lines > most ? C_BAD : C_FAINT), "\xC2\xB7 %d line%s of %d%s", lines, lines == 1 ? "" : "s", most,
+		              lines > most ? ": the game draws the rest past the box" : "");
 		igPopFont();
 		if (n > 1) {
 			igSameLine(igGetWindowWidth() - S(40), 0);
