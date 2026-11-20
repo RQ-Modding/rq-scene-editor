@@ -157,6 +157,7 @@ const char *media_mod_dir(void);
  * stage; PIC_LOADING for a frame or two while it is read. */
 const struct picture *media_picture(const cJSON *v);
 const struct picture *media_cg(int no);   /* a CG of the game by its number, the same way */
+const struct picture *media_mod_picture(const char *path);   /* a picture in the mod's folder, the same way */
 struct thumb *media_thumb(int no);     /* a CG's thumbnail, made on Rance Browser's thread */
 bool media_cg_exists(int no);
 const char *media_face_owner(int face);   /* rq.ids' character for a face CG, or NULL */
@@ -312,6 +313,31 @@ int cast_uses(const char *key, char *first, size_t n);
 /* A picture value (a CG number or a mod picture) in a box, cropped to fill it; top: keep its top. */
 void draw_picture_small(ImDrawList *dl, const cJSON *v, V2 a, V2 b, bool top);
 
+/* ---- the pickers (picker.c) ---- */
+
+/* The picture picker's tabs. */
+enum { PICK_FACES, PICK_STANDING, PICK_BACKGROUNDS, PICK_SMALL, PICK_SCENE, PICK_OTHER, PICK_MOD, PICK_TABS };
+
+/* Where a pick goes: a value of a step (or of its set), or a cast entry's face. */
+struct pick_target {
+	char place[256];   /* the step's place; "" for a cast entry */
+	char cast[128];    /* the cast entry, when place is "" */
+	char sub[16];      /* "set": a layer of a set */
+	char key[32];      /* the value's key */
+	int tab;           /* PICK_*: the tab it opens on when the value says nothing */
+	bool speaker;      /* a line's speaker: the cast's names are offered */
+	int sound;         /* -1: the picture picker; SOUND_MUSIC or SOUND_EFFECT: the sound picker */
+};
+
+void picker_open(const struct pick_target *t);   /* opens at the end of the frame */
+void picker_frame(void);                         /* in the root window, after the rest */
+bool picker_is_open(void);
+/* --do: find=TEXT, ptab=NAME, group=N, tile=NO|PATH, showscene, use, addcast[=NAME]. */
+bool picker_do(const char *name, const char *arg);
+/* --do picker[=KEY]: the next field drawn with a Pick button (of that key) opens its picker. */
+extern bool picker_requested;
+extern char picker_requested_key[32];
+
 /* ---- the open file (doc.c) ---- */
 
 struct snap {
@@ -386,7 +412,9 @@ bool ui_wants_quit(void);   /* the window's close: asks first when there are uns
 /* An action as the window's buttons do it, for --shot --do: select=PLACE, add=KIND, apply=JSON,
  * type=JSON, copy, delete, up, down, undo, redo, tab=steps|cast, modal=unsaved|layout|changed|new,
  * fold, page=N (a line's page on the stage), json (the step's JSON open), cast=NAME (picked in Cast
- * and file), castadd, move=FROM|LIST|INDEX (a step dropped into a list before its step INDEX). False when it is unknown or did nothing it could check. */
+ * and file), castadd, move=FROM|LIST|INDEX (a step dropped into a list before its step INDEX),
+ * printstep (the selected step and the cast as JSON on stdout), picker[=KEY] and the picker's own
+ * (picker_do). False when it is unknown or did nothing it could check. */
 bool ui_do(const char *action);
 int ui_label_count(void);           /* the open file's labels */
 const char *ui_label_name(int i);

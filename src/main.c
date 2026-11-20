@@ -391,6 +391,7 @@ int main(int argc, char **argv)
 	ui_init(dir, A.mod_dir, A.mod, A.file, A.select);
 	int failed_dos = 0;
 	int next_do = run_dos(0, &failed_dos);
+	unsigned last_do_frame = 0;
 
 	GLuint fbo = 0;
 	if (A.shot_path) {
@@ -445,7 +446,10 @@ int main(int argc, char **argv)
 			/* The shot waits for the pictures it shows (a few seconds at most). */
 			if (UI.frame > 12 && (media_idle() || UI.frame > 900) && next_do < A.ndo) {
 				next_do = run_dos(next_do, &failed_dos);   /* a frame drawn: the next actions */
-			} else if (UI.frame > 12 && (media_idle() || UI.frame > 900)) {
+				last_do_frame = UI.frame;
+			} else if (UI.frame > 12 && UI.frame > last_do_frame + 3 && (media_idle() || UI.frame > 900)) {
+				/* A few frames after the last actions: Dear ImGui shows a tab or a scroll they set
+				 * a frame later. */
 				code = shot_save(A.w, A.h, A.shot_path) ? 0 : 1;
 				if (code)
 					fprintf(stderr, APP_EXE ": could not write %s\n", A.shot_path);

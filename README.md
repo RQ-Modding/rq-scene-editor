@@ -7,7 +7,7 @@ A scene file is a mod's scene as JSON: the cast, then the steps the game plays (
 music, choices, branches). A mod plays one with `rq.scene.file`. The editor lists a mod's scene
 files, shows each file's steps as a list with its branches as a tree, and writes the file back.
 
-**State: 0.4.0, not released.** What it does so far:
+**State: 0.5.0, not released.** What it does so far:
 
 - it finds the game folder and lists the game's mods, or opens a mod's folder from anywhere;
 - it lists the mod's scene files, with a line count and why a file cannot be read;
@@ -25,15 +25,16 @@ files, shows each file's steps as a list with its branches as a tree, and writes
   with its pages, choices, branches, labels, music and sounds, without the game;
 - it picks an effect, a shake and a place of the world map by name, and a row hovered in the list
   plays on the stage;
+- it picks a face, a picture, a track or a sound in a window of the game's own, by its look and its
+  name (the faces and the standing pictures by character), or a picture in the mod's folder;
 - it edits the cast: faces, name plates, renaming an entry with the lines that use it;
 - it has undo and redo, and it notices when a file changes on disk;
 - it reads each file as RQ MOD reads it, so a file the game refuses shows the game's own message;
 - it has two looks, Copandon (dark, the default) and Parchment (light).
 
-Still to come: picking faces, pictures, music and sounds from the game in a window instead of by
-number; the conditions, and a choice row's condition, colour and sound, in fields; RQ MOD's own
-checks on the file; and Play in the game, which starts the scene in the running game. It will ship
-in RQ MOD's package, as Rance Browser does.
+Still to come: the conditions, and a choice row's condition, colour and sound, in fields; RQ MOD's
+own checks on the file; and Play in the game, which starts the scene in the running game. It will
+ship in RQ MOD's package, as Rance Browser does.
 
 It is a fan project. AliceSoft and MangaGamer do not make or endorse it, and it contains nothing of
 their games.
@@ -66,6 +67,15 @@ name at the bottom to pick another.
   shake's mode, what it does. A row hovered in the list plays the step with it on the stage, over
   and over. An effect the engine does not draw plays as the engine plays it (a crossfade through a
   blur). The world map's step picks one of the game's places by name, or a point of the mod's own.
+- **Pick...:** beside a picture, a face, a track or a sound, a window of the game's own. Pictures
+  come in tabs: the faces and the standing pictures by character (RQ MOD's names, and for the faces
+  the game's own name plates), the backgrounds (the wallpapers among them, from 5500), the small
+  scene CGs, the scene CGs, the game's other CGs by hundreds, and the pictures in the mod's folder.
+  Search by number or name; a picture under the mouse shows larger; a double click or **Use**
+  writes the pick. For a line's speaker, the file's cast shows above the faces: a face the cast has
+  writes the cast's name, and **Add to the cast as...** puts another face into the cast with a
+  name. The scene CGs, the game's event pictures with its adult scenes among them, show only after
+  **Show the scene CGs**, once a session. A track or a sound plays with ▶ before it is picked.
 - **Cast and file:** the cast, each entry with its face, its name plate and the lines that use it,
   and the file's own fields (Plays once, the format, the schema).
 - **Keys:** Ctrl+S saves, Ctrl+Z undoes, Ctrl+Y (or Ctrl+Shift+Z) redoes, Up and Down move through the
@@ -119,7 +129,13 @@ rq-scene-editor --mixer-check [--game DIR]
   `playon` (Play from here), `clock=MS` (the player's clock held at MS), `click`, `pick=ROW`
   (a row of the menu on show), `answer=then|else` (the `if` asked), `preview=EFFECT` (a row of an
   effect's or a shake's list hovered) and `print` (the step playing and the line under the stage,
-  on stdout). `frame` draws a frame before the actions after it, so a run can go through a scene.
+  on stdout). The pickers: `picker` or `picker=KEY` (Pick... beside the selected step's value, or
+  beside the one of that key, such as `background` in a picture set), then `find=TEXT`,
+  `ptab=faces|standing|backgrounds|small|scene|other|mod`, `group=N`, `tile=NUMBER|PATH`,
+  `showscene`, `use` and `addcast[=NAME]`. `printstep` prints the selected step and the cast as
+  JSON on stdout. `mouse=X,Y`, `mdown` and `mup` move the mouse and press its left button, as the
+  window takes a mouse. `frame` draws a frame before the actions after it, so a run can go through
+  a scene; the shot waits a few frames after the last actions.
 - `--mixer-check` mixes Play from here's sounds without a sound device and checks them: two sounds
   at once, a track's fade halfway, its loop, a sound's end.
 - `--selftest` tries editing, undo, saving and changes on disk on FILE. FILE must be a copy: it is

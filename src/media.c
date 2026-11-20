@@ -153,6 +153,11 @@ const struct picture *media_cg(int no)
 	return picture_of(no, NULL);
 }
 
+const struct picture *media_mod_picture(const char *path)
+{
+	return path && path[0] ? picture_of(-1, path) : &none;
+}
+
 static const struct picture *picture_of(int no, const char *path)
 {
 	if (no == 0 || (!path && no < 0))

@@ -2,6 +2,32 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 0.5.0 (not released)
+
+Pickers: the game's pictures, music and sounds by their look and their names.
+
+- **Pick... beside every picture.** A window of the game's own pictures, in tabs as a scene uses
+  them: the faces and the standing pictures by character (RQ MOD's names; the faces also by the
+  game's own name plates), the backgrounds (the wallpapers among them, from 5500), the small scene
+  CGs, the scene CGs, the game's other CGs by hundreds, and the pictures in the mod's own folder by
+  folder. A search by number or name, a larger picture under the mouse, and the pick shown at the
+  bottom with what it writes where; a double click or **Use** writes it, one step to undo. It opens
+  on the value the field holds.
+- **Faces and the cast.** For a line's speaker the file's cast shows above the faces; a face the
+  cast has writes the cast's name, and **Add to the cast as...** puts another face into the cast
+  with a name and writes that name. A cast entry's face has a Pick... of its own.
+- **The scene CGs** (the game's event pictures, its adult scenes among them) show only when asked,
+  once a session; the picker never opens on them.
+- **Tracks and sounds** in a list, the tracks with their names, each with ▶ to hear it before
+  picking it; a track that does not loop says so. The window's title says which: a track or a
+  sound.
+- A GIF or a moving WebP in the mod's folder shows its kind in the picker: the game moves it, the
+  editor does not draw it.
+- **For checks and agents,** `--do picker[=KEY]` opens a picker and `find`, `ptab`, `group`,
+  `tile`, `showscene`, `use` and `addcast` drive it; `printstep` prints the step and the cast as
+  JSON; `mouse=X,Y`, `mdown` and `mup` reach the window as a mouse does. A shot waits a few frames
+  after its last actions, so a tab or a scroll they set shows.
+
 ## 0.4.0 (not released)
 
 The stage moves: a step's motion, and the scene played on from a step, without the game.

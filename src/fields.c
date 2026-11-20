@@ -16,6 +16,7 @@
 #include "editor.h"
 
 static char cur_place[256];   /* the step being edited */
+static char cur_cast[128];    /* or the cast entry */
 static bool ro;
 static ImGuiID live_id;       /* the field being typed in (D.live) */
 
@@ -284,8 +285,48 @@ static void picture_words(const cJSON *v, char *out, size_t n, bool *bad)
 	}
 }
 
-/* A picture: a CG number of the game, or a path in the mod's folder ("faces/mira.png"). */
-static void picture_field(const char *id, cJSON *o, const char *k, bool optional)
+/* The picker's tab for a value's key: the folder of the game's CGs a layer takes. */
+static int pick_tab_for(const char *key)
+{
+	if (!strcmp(key, "portrait"))
+		return PICK_STANDING;
+	if (!strcmp(key, "mini"))
+		return PICK_SMALL;
+	if (!strcmp(key, "cg"))
+		return PICK_SCENE;
+	if (!strcmp(key, "face") || !strcmp(key, "say") || !strcmp(key, "think"))
+		return PICK_FACES;
+	return PICK_BACKGROUNDS;
+}
+
+#define PICK_W S(66)
+
+/* Pick...: the picker for this value (--do picker[=KEY] presses it). */
+static void pick_button(const char *key, const char *sub, bool speaker, int sound)
+{
+	bool want = picker_requested && (!picker_requested_key[0] || !strcmp(picker_requested_key, key));
+	igBeginDisabled(ro);
+	bool click = igButton("Pick\xE2\x80\xA6", v2(PICK_W, 0));
+	igEndDisabled();
+	if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+		igSetTooltip("%s", sound >= 0 ? "Pick from the game's list, with Play" : "Pick from the game's pictures or the mod's, by their look and name");
+	if ((click || want) && !ro) {
+		picker_requested = false;
+		struct pick_target t;
+		memset(&t, 0, sizeof t);
+		snprintf(t.place, sizeof t.place, "%s", cur_place);
+		snprintf(t.cast, sizeof t.cast, "%s", cur_cast);
+		snprintf(t.sub, sizeof t.sub, "%s", sub ? sub : "");
+		snprintf(t.key, sizeof t.key, "%s", key);
+		t.tab = pick_tab_for(key);
+		t.speaker = speaker;
+		t.sound = sound;
+		picker_open(&t);
+	}
+}
+
+/* A picture: a CG number of the game, or a path in the mod's folder ("faces/mira.png"), with Pick. */
+static void picture_field_in(const char *id, cJSON *o, const char *k, bool optional, const char *sub, bool speaker)
 {
 	cJSON *v = item(o, k);
 	if (cJSON_IsNumber(v))
@@ -296,7 +337,7 @@ static void picture_field(const char *id, cJSON *o, const char *k, bool optional
 		scratch[0] = 0;
 	float box_w = S(58), box_h = S(42);
 	V2 p = igGetCursorScreenPos();
-	igSetNextItemWidth(-box_w - S(10));
+	igSetNextItemWidth(-box_w - S(10) - PICK_W - S(6));
 	if (igInputTextWithHint(id, optional ? "empty: the layer emptied" : "a CG number, or a picture in the mod's folder",
 	                        scratch, 600, ro ? ImGuiInputTextFlags_ReadOnly : 0, NULL, NULL)) {
 		char *end = NULL;
@@ -312,6 +353,8 @@ static void picture_field(const char *id, cJSON *o, const char *k, bool optional
 		typed();
 	}
 	after_text_item();
+	igSameLine(0, S(6));
+	pick_button(k, sub, speaker, -1);
 	v = item(o, k);
 	float right = igGetItemRectMax().x + S(10);
 	ImDrawList *dl = igGetWindowDrawList();
@@ -332,6 +375,11 @@ static void picture_field(const char *id, cJSON *o, const char *k, bool optional
 	}
 	if (igGetCursorScreenPos().y < y_after)
 		igDummy(v2(0, y_after - igGetCursorScreenPos().y));
+}
+
+static void picture_field(const char *id, cJSON *o, const char *k, bool optional)
+{
+	picture_field_in(id, o, k, optional, NULL, false);
 }
 
 /* ---- values (args, end, a variable's value) ---- */
@@ -604,7 +652,7 @@ static void speaker_field(cJSON *st, const char *k, const cJSON *cast)
 	}
 	row_label("Speaker", "The face beside the line: a name of the cast, a face CG number, or a picture in the mod's folder");
 	float ih = S(30);
-	igSetNextItemWidth(-1);
+	igSetNextItemWidth(-PICK_W - S(6));
 	igPushStyleVar_Vec2(ImGuiStyleVar_FramePadding, v2(S(9), (ih - igGetFontSize()) / 2));
 	igBeginDisabled(ro);
 	bool open = igBeginCombo("##speaker", "", ImGuiComboFlags_CustomPreview | ImGuiComboFlags_HeightLarge);
@@ -656,12 +704,19 @@ static void speaker_field(cJSON *st, const char *k, const cJSON *cast)
 		igEndCombo();
 	}
 	igEndDisabled();
+	igSameLine(0, S(6));
+	igPushStyleVar_Vec2(ImGuiStyleVar_FramePadding, v2(S(9), (ih - igGetFontSize()) / 2));
+	if (!cJSON_IsNumber(v) && !is_path)
+		pick_button(k, NULL, true, -1);
+	else
+		igDummy(v2(PICK_W, ih));
+	igPopStyleVar(1);
 	if (cJSON_IsNumber(v)) {
 		row_label("Face", "A face CG of the game (the faces start at 2000)");
-		picture_field("##face", st, k, false);
+		picture_field_in("##face", st, k, false, NULL, true);
 	} else if (is_path) {
 		row_label("Picture", "A picture in the mod's folder: PNG, WebP, JPEG, or a GIF that moves");
-		picture_field("##face", st, k, false);
+		picture_field_in("##face", st, k, false, NULL, true);
 	} else if (is_cast && !item((cJSON *)cast, v->valuestring)) {
 		bad_line("This name is not in the cast: add it in Cast and file, or pick another speaker");
 	}
@@ -932,6 +987,8 @@ static void sound_field(cJSON *st, const char *kind, int what)
 {
 	row_label(!strcmp(kind, "music") ? "Track" : !strcmp(kind, "sound") ? "Sound" : "Jingle", NULL);
 	number_field("##no", st, kind, "its number", false, S(110));
+	igSameLine(0, S(6));
+	pick_button(kind, NULL, false, what >= 0 ? what : SOUND_EFFECT);
 	cJSON *v = item(st, kind);
 	int no = cJSON_IsNumber(v) ? (int)v->valuedouble : -1;
 	if (what >= 0 && no >= 0 && media_can_play(what, no)) {
@@ -954,6 +1011,7 @@ static const char *const end_values[] = { "clear", "fail", "abandon", "escape" }
 void fields_step(cJSON *st, const char *place, bool readonly)
 {
 	snprintf(cur_place, sizeof cur_place, "%s", place);
+	cur_cast[0] = 0;
 	ro = readonly;
 	if (strcmp(page_for, place)) {
 		fields_page = 0;
@@ -1003,7 +1061,7 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 		for (int i = 0; i < 5; i++) {
 			igPushID_Int(i);
 			row_label(names[i], NULL);
-			picture_field("##layer", set, keys[i], true);
+			picture_field_in("##layer", set, keys[i], true, "set", false);
 			igPopID();
 		}
 		hint_line("A layer left empty is emptied. With a scene CG or an effect, the layers change in one transition.");
@@ -1282,6 +1340,7 @@ const char *fields_cast(const char *key, bool readonly)
 	if (!e)
 		return out;
 	cur_place[0] = 0;
+	snprintf(cur_cast, sizeof cur_cast, "%s", key);
 	ro = readonly;
 	igPushID_Str(key);
 	igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, v2(S(8), S(7)));

@@ -2294,6 +2294,7 @@ static void modals(void)
 			igCloseCurrentPopup();
 		modal_end();
 	}
+	picker_frame();
 }
 
 /* ---- an action by name (--shot --do), as the window's own buttons do it ---- */
@@ -2373,8 +2374,30 @@ bool ui_do(const char *action)
 	else if (!strcmp(name, "print")) {   /* what plays, on stdout */
 		printf("play %s %s | %s\n", play_active() ? "on" : "off", play_step_place(), play_status());
 		fflush(stdout);
+	} else if (!strcmp(name, "mouse")) {   /* mouse=X,Y: the mouse moved there, as Dear ImGui takes it */
+		float x = 0, y = 0;
+		if (sscanf(arg, "%f,%f", &x, &y) != 2)
+			return false;
+		ImGuiIO_AddMousePosEvent(igGetIO_Nil(), x, y);
+	} else if (!strcmp(name, "mdown") || !strcmp(name, "mup")) {   /* the left button pressed, let go */
+		ImGuiIO_AddMouseButtonEvent(igGetIO_Nil(), 0, name[1] == 'd');
+	} else if (!strcmp(name, "printstep")) {   /* the selected step and the cast as JSON, on stdout */
+		cJSON *st = sel_step(NULL, NULL);
+		char *j = st ? json_inline(st) : NULL;
+		const cJSON *cast = D.root ? cJSON_GetObjectItemCaseSensitive(D.root, "cast") : NULL;
+		char *c = cast ? json_inline(cast) : NULL;
+		printf("step %s %s\ncast %s\n", UI.sel[0] ? UI.sel : "-", j ? j : "none", c ? c : "none");
+		fflush(stdout);
+		free(j);
+		free(c);
 	} else if (!strcmp(name, "preview"))   /* preview=N: as if the list's row N were hovered (-2 the default) */
 		held_preview = atoi(arg);
+	else if (!strcmp(name, "picker")) {   /* picker[=KEY]: Pick... beside the selected step's value */
+		picker_requested = true;
+		snprintf(picker_requested_key, sizeof picker_requested_key, "%s", arg);
+	} else if (!strcmp(name, "find") || !strcmp(name, "ptab") || !strcmp(name, "group") || !strcmp(name, "tile")
+	           || !strcmp(name, "showscene") || !strcmp(name, "use") || !strcmp(name, "addcast"))
+		return picker_do(name, arg);
 	else if (!strcmp(name, "move")) {   /* move=FROM|LIST|INDEX, as a drop does it */
 		char from[256], list[256];
 		int index = 0;
