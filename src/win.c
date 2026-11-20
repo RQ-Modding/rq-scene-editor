@@ -223,3 +223,15 @@ void win_attach_console(void)
 		freopen("CONOUT$", "w", stderr);
 	}
 }
+
+const char *path_shown(const char *path, char *out, size_t n)
+{
+	snprintf(out, n, "%s", path ? path : "");
+	for (char *c = out; *c; c++)
+		if (*c == '/')
+			*c = '\\';
+	size_t k = strlen(out);
+	while (k > 3 && out[k - 1] == '\\')
+		out[--k] = 0;
+	return out;
+}

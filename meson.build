@@ -11,7 +11,7 @@
 # with RQ MOD's own checker (scene_check.lua) in Lua 5.4 (third_party/lua): RQ MOD passes its own
 # copy with scene_check_lua; alone, the editor builds with data/scene_check.lua.
 project('rq-scene-editor', 'c', 'cpp',
-        version : '0.8.0',
+        version : '0.9.0',
         meson_version : '>= 0.59',
         default_options : ['c_std=c11', 'cpp_std=c++17', 'warning_level=1'])
 add_project_arguments('-D_DEFAULT_SOURCE', language : 'c')

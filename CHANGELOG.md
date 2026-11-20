@@ -2,6 +2,34 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 0.9.0 (not released)
+
+Find, keys for Play, values with a type, and the game started again.
+
+- **Find.** A third tab in the bottom panel looks for a text in every line, name plate, choice row,
+  comment and value of the mod's scene files, the open one as it is typed. Each hit shows its file,
+  its place and its field, with the text marked; a click opens the file there (a cast entry's name
+  plate opens the cast). Enter goes to the next hit, **Match case** tells capitals apart, Ctrl+F
+  opens it.
+- **Keys for Play:** F5 plays the file in the game, F6 plays it from the selected step and
+  Shift+F5 stops it, as the top bar's buttons do (their tips name the keys).
+- **A type for each value for Play:** Text, Number, true or false, or none (Play sends nothing).
+  A text that the game would read as a number, as true or false, or a text in single quotes goes
+  in single quotes (`n='5'`), so the game gets the text; RQ MOD reads them so since 2.62.1, and
+  with an older one Play says why it cannot send such a text. A number that is not one is marked
+  in its field and not sent.
+- **The game started again** while the editor watches is known by its process, and the editor asks
+  it again for its version, its mods and the mod's functions. It used to keep the first game's
+  version until a question failed.
+- **The pipe.** The editor waits up to 5 s for a game busy with another program, and tries again for
+  a moment when the game is between two programs, instead of saying it is not running.
+- The game's folder shows one way in the status line and in the pill's tip, with back slashes; a
+  folder the game names in the ANSI code page shows in its own letters.
+- **For checks and agents,** `--do search=TEXT`, `findcase=on|off`, `printfound`, `foundgo=N`,
+  `printsel`, `panel=find`, `key=F5|F6|shift+F5|ctrl+F`, `gamewait=version=X`, and
+  `value=NAME:TYPE=VALUE` (`text`, `number`, `true`, `false`, `none`); `printvalues` gives each
+  value's type and what Play sends.
+
 ## 0.8.0 (not released)
 
 Play in the game: the file played in the running game, values for its `{name}`s, the mod's

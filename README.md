@@ -7,7 +7,7 @@ A scene file is a mod's scene as JSON: the cast, then the steps the game plays (
 music, choices, branches). A mod plays one with `rq.scene.file`. The editor lists a mod's scene
 files, shows each file's steps as a list with its branches as a tree, and writes the file back.
 
-**State: 0.8.0, not released.** What it does so far:
+**State: 0.9.0, not released.** What it does so far:
 
 - it finds the game folder and lists the game's mods, or opens a mod's folder from anywhere;
 - it lists the mod's scene files, with a line count and why a file cannot be read;
@@ -41,8 +41,10 @@ files, shows each file's steps as a list with its branches as a tree, and writes
   what the game's message box cannot show: a letter its font does not have, a page of more lines
   than the box holds, a `{name}` no step sets;
 - it shows the game's log for the mod, the lines as the game writes them;
-- it plays the file in the running game (**Play**, **From here**, **Stop**), with a value for each
-  `{name}`, and lights the step the game plays; with the game running it checks the calls against
+- it finds a text in every line, name plate, row and value of the mod's scene files;
+- it plays the file in the running game (**Play**, **From here**, **Stop**, or F5, F6 and Shift+F5),
+  with a value for each `{name}` (a text, a number, true or false), and lights the step the game
+  plays; with the game running it checks the calls against
   the mod's functions, and lists what the game refuses;
 - it has two looks, Copandon (dark, the default) and Parchment (light).
 
@@ -85,7 +87,8 @@ name at the bottom to pick another.
   or it is saving. Play waits for the game when it is not running, when it does not run the mod
   from the folder the editor has open (the pill says which), while a scene plays, and while the
   file has a problem. The editor finds the game on its own, through RQ MOD's pipe
-  (`\\.\pipe\rqmod`, as `rqmod-ctl` speaks it), asking it a little every few seconds.
+  (`\\.\pipe\rqmod`, as `rqmod-ctl` speaks it), asking it a little every few seconds, and knows
+  when the game was started again. F5 is Play, F6 From here and Shift+F5 Stop.
 - **Effects and shakes:** beside an effect's number, the engine's effects by name; beside a
   shake's mode, what it does. A row hovered in the list plays the step with it on the stage, over
   and over. An effect the engine does not draw plays as the engine plays it (a crossfade through a
@@ -117,8 +120,9 @@ name at the bottom to pick another.
   to it with it, unless another label had the old name too.
 - **Cast and file:** the cast, each entry with its face, its name plate and the lines that use it;
   **Values for Play**, each `{name}` of the file with the value Play gives it (as the mod's
-  `rq.scene.file` would with `vars`; the stage shows it too) and the choice or call that sets it in
-  the scene; **The mod's functions this file calls**, each with where it is called and, with the
+  `rq.scene.file` would with `vars`; the stage shows it too), its type (Text, Number, true, false,
+  or none: Play sends nothing) and the choice or call that sets it in the scene. A text the game
+  would read as a number, true or false goes as a text (RQ MOD 2.62.1 or newer); **The mod's functions this file calls**, each with where it is called and, with the
   game running, whether the mod names it; and the file's own fields (Plays once, the format, the
   schema). The values are kept per mod and file.
 - **Problems:** the panel at the bottom, folded to its tabs while the file has none. It runs RQ
@@ -137,8 +141,13 @@ name at the bottom to pick another.
   and RQ MOD's lines that name it), read as they come; **Every line** shows them all. A line that
   names a place of one of the mod's scene files (`scenes/meeting.json: steps[3]: ...`) opens that
   file at that step when clicked.
+- **Find:** the panel's third tab (Ctrl+F) looks for a text in every line, name plate, choice row,
+  comment and value of the mod's scene files, the open one as it is typed; each hit shows its file,
+  place and field with the text marked, and a click opens it there. Enter goes to the next hit;
+  **Match case** tells capitals apart.
 - **Keys:** Ctrl+S saves, Ctrl+Z undoes, Ctrl+Y (or Ctrl+Shift+Z) redoes, Up and Down move through the
-  steps, Alt+Up and Alt+Down move a step, Ctrl+D copies it and Delete removes it.
+  steps, Alt+Up and Alt+Down move a step, Ctrl+D copies it and Delete removes it. F5 plays the file
+  in the game, F6 from the selected step, Shift+F5 stops it; Ctrl+F opens Find.
 
 ### One layout for every file
 
@@ -206,18 +215,23 @@ rq-scene-editor --mixer-check [--game DIR]
   `1` for the second check of the top group, `1.0` for the first check in that one's group.
   `does=on|steps|goto:LABEL|end:VALUE` sets what the selected row does, `label=NAME` renames the
   selected label with its go-tos, and `printfile` prints the whole file as the editor writes it.
-  The bottom panel: `panel=problems|log|logall` opens it on that tab (`logall` with every line),
-  `printproblems` prints the open file's problems, `goproblem=N` clicks the Nth one,
+  The bottom panel: `panel=problems|log|logall|find` opens it on that tab (`logall` with every
+  line), `printproblems` prints the open file's problems, `goproblem=N` clicks the Nth one,
   `logfile=PATH` reads another file as the game's log, `printlog` prints the lines the log tab
-  shows and `loglink=N` clicks its Nth line.
+  shows and `loglink=N` clicks its Nth line. Find: `search=TEXT` (the tab open with that text),
+  `findcase=on|off`, `printfound` (each hit as `FILE | PLACE | FIELD | text with the [hit]`),
+  `foundgo=N` (the Nth hit clicked) and `printsel` (the open file and its selected step, row or cast
+  entry). `key=F5|F6|shift+F5|ctrl+F` does what the key does.
   The game: a shot asks the running game nothing until `game`, `pipe=NAME` (another pipe than
   `rqmod`: with no game on it, as when the game is not running) or one of these: `gameplay`
   (**Play**), `gamefrom` (**From here** at the selected step), `gamestop`, `gamewait=STATE[:SECS]`
   (the actions after it wait up to SECS, 15 by default, for `off`, `ready`, `functions` (the mod's
   functions known), `notloaded`, `otherdir`, `old`, `idle`, `waiting`, `playing`, `place=PLACE`
-  (the game plays that step) or `refused` (the game refused the file)), `printgame` (what the
-  editor knows of the game, its pill and why Play cannot play), `value=NAME=TEXT` (a value for
-  Play, kept for the run only) and `printvalues`. A file with changes is not played from a shot,
+  (the game plays that step), `refused` (the game refused the file) or `version=X` (RQ MOD's
+  version is X)), `printgame` (what the editor knows of the game, its pill and why Play cannot
+  play), `value=NAME=TEXT` (a text for Play, kept for the run only; `value=NAME:TYPE=VALUE` with
+  TYPE `text`, `number`, `true`, `false` or `none`) and `printvalues` (each `{name}`, its type and
+  value, where the scene sets it, its uses, and what Play sends). A file with changes is not played from a shot,
   as nothing is saved.
   `frame` draws a frame before the actions after it, so a run can go through a scene; the shot
   waits a few frames after the last actions.

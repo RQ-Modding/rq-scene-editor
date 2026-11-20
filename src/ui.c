@@ -48,7 +48,7 @@ static char (*vis)[256];
 static int nvis, capvis;
 
 static bool problems_folded;
-static int panel_tab;           /* the bottom panel: 0 the problems, 1 the game's log */
+static int panel_tab;           /* the bottom panel: 0 the problems, 1 the game's log, 2 Find */
 static bool log_override;       /* --do logfile=PATH: another log than the game's */
 static char pending_sel[256];   /* a place to select once the file asked for is open */
 static int want_mid_tab = -1;   /* 0 Steps, 1 Cast and file: opened next frame */
@@ -65,6 +65,8 @@ static bool game_lit_new;
 static const char *play_sel(char *out, size_t n);
 static void game_go(bool from_here);
 static void game_send(const char *from);
+static void go_to_problem(const char *place);
+static void find_open(void);
 
 /* ---- small helpers ---- */
 
@@ -397,6 +399,8 @@ static void do_pending(int what, const char *arg)
 		if (pending_sel[0] && D.root && place_exists(D.root, pending_sel)) {
 			select_place(pending_sel, true);
 			want_mid_tab = 0;
+		} else if (!strncmp(pending_sel, "cast.", 5) && D.root) {
+			go_to_problem(pending_sel);
 		}
 		pending_sel[0] = 0;
 		break;
@@ -733,6 +737,17 @@ static bool any_popup(void)
 	return igIsPopupOpen_Str("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
 
+/* F5 Play, F6 From here, Shift+F5 Stop: as the top bar's buttons (0, 1, 2). */
+static void game_key(int k)
+{
+	if (k == 2) {
+		if (game_state() == GAME_READY && game_scene() && !game_stopping())
+			game_stop();
+		return;
+	}
+	game_go(k == 1);
+}
+
 static void keys(void)
 {
 	if (any_popup() || UI.shot)
@@ -743,6 +758,15 @@ static void keys(void)
 			apply_edit();
 		save_now();
 	}
+	bool f5 = igIsKeyChordPressed_Nil(ImGuiKey_F5), f6 = igIsKeyChordPressed_Nil(ImGuiKey_F6);
+	bool sf5 = igIsKeyChordPressed_Nil(ImGuiMod_Shift | ImGuiKey_F5);
+	if (f5 || f6 || sf5) {
+		if (io->WantTextInput && strcmp(edit_buf, edit_src))
+			apply_edit();
+		game_key(sf5 ? 2 : f6 ? 1 : 0);
+	}
+	if (igIsKeyChordPressed_Nil(ImGuiMod_Ctrl | ImGuiKey_F))
+		find_open();
 	if (io->WantTextInput)
 		return;
 	if (play_active()) {
@@ -919,23 +943,23 @@ static void game_buttons(float right)
 		game_go(false);
 	igEndDisabled();
 	tip_always(blocked ? why : "Saves the file and plays it in the game from its first step, with the values for Play "
-	                           "(Cast and file). The mod's functions and the game's commands run for real.");
+	                           "(Cast and file). The mod's functions and the game's commands run for real. (F5)");
 	igSameLine(0, S(6));
 	bool has_sel = D.root && UI.sel[0] && (sel_step(NULL, NULL) || sel_row(NULL, NULL));
 	igBeginDisabled(blocked || !has_sel);
 	if (igButton("\xE2\x96\xB6  From here##gamefrom", v2(0, 0)))
 		game_go(true);
 	igEndDisabled();
-	tip_always(blocked ? why : !has_sel ? "Select a step: the game plays from it" :
+	tip_always(blocked ? why : !has_sel ? "Select a step: the game plays from it (F6)" :
 	           "Saves the file and plays it in the game from the selected step (a row: its choice), with the "
-	           "values for Play");
+	           "values for Play (F6)");
 	igSameLine(0, S(6));
 	bool can_stop = game_state() == GAME_READY && game_scene() && !game_stopping();
 	igBeginDisabled(!can_stop);
 	if (igButton("\xE2\x96\xA0  Stop##gamestop", v2(0, 0)))
 		game_stop();
 	igEndDisabled();
-	tip_always(can_stop ? "Stops the scene the game plays: it ends at its next step, after the click it waits for"
+	tip_always(can_stop ? "Stops the scene the game plays: it ends at its next step, after the click it waits for (Shift+F5)"
 	                    : "Nothing plays in the game");
 	igSameLine(0, S(12));
 	game_pill_draw(right - igGetCursorPosX());
@@ -1809,6 +1833,7 @@ static void values_table(void)
 		igTableHeadersRow();
 		igPopStyleColor(1);
 		static char bufs[128][256], for_name[128][64];
+		static bool bad_num[128];
 		static int active = -1;
 		for (int i = 0; i < n; i++) {
 			const struct value_name *v = &names[i];
@@ -1823,22 +1848,68 @@ static void values_table(void)
 				igSetTooltip("Used %d time%s, first at %s%s", v->uses, v->uses == 1 ? "" : "s", v->first[0] ? v->first : "-",
 				             v->checked ? "\nAn if checks it (\"var\")" : "");
 			igTableNextColumn();
-			if (active != i || strcmp(for_name[i], v->name)) {
-				const char *now = values_get(v->name);
-				snprintf(bufs[i], sizeof bufs[i], "%s", now ? now : "");
-				snprintf(for_name[i], sizeof for_name[i], "%s", v->name);
+			/* Its type, as the game gets it: none (Play sends nothing), a text, a number, true or false. */
+			static const char *const vt[] = { "none", "Text", "Number", "true", "false" };
+			int t = values_type(v->name);
+			igSetNextItemWidth(S(88));
+			if (igBeginCombo("##type", vt[t], 0)) {
+				for (int k = 0; k < 5; k++) {
+					if (!igSelectable_Bool(vt[k], k == t, 0, v2(0, 0)) || k == t)
+						continue;
+					const char *now = values_get(v->name);
+					if (k == VAL_NUMBER) {
+						if (!values_set_typed(v->name, k, now ? now : ""))
+							values_set_typed(v->name, k, "0");
+					} else if (k == VAL_TEXT) {
+						values_set_typed(v->name, k, now ? now : "");
+					} else {
+						values_set_typed(v->name, k, NULL);
+					}
+					bad_num[i] = false;
+				}
+				igEndCombo();
 			}
-			igSetNextItemWidth(-1);
-			const char *hint = v->set_by[0] ? "none: the scene sets it"
-			                 : v->checked && !values_get(v->name) && v->uses == 1 ? "none: its if finds it not set"
-			                 : "none: the line shows it as written";
-			if (igInputTextWithHint("##value", hint,
-			                        bufs[i], sizeof bufs[i], 0, NULL, NULL))
-				values_set(v->name, bufs[i]);
-			if (igIsItemActive())
-				active = i;
-			else if (active == i)
-				active = -1;
+			igSetItemTooltip("What the game gets for {%s}: a text, a number, true or false; none sends nothing", v->name);
+			t = values_type(v->name);
+			igSameLine(0, S(6));
+			if (t == VAL_TRUE || t == VAL_FALSE) {
+				igAlignTextToFramePadding();
+				igTextColored(colv(C_FAINT), "the line shows %s", t == VAL_TRUE ? "true" : "false");
+			} else {
+				if (active != i || strcmp(for_name[i], v->name)) {
+					const char *now = values_get(v->name);
+					snprintf(bufs[i], sizeof bufs[i], "%s", now ? now : "");
+					snprintf(for_name[i], sizeof for_name[i], "%s", v->name);
+					bad_num[i] = false;
+				}
+				igSetNextItemWidth(-1);
+				const char *hint = v->set_by[0] ? "none: the scene sets it"
+				                 : v->checked && !values_get(v->name) && v->uses == 1 ? "none: its if finds it not set"
+				                 : "none: the line shows it as written";
+				if (bad_num[i]) {
+					igPushStyleColor_Vec4(ImGuiCol_Border, colv(C_BAD));
+					igPushStyleVar_Float(ImGuiStyleVar_FrameBorderSize, S(1));
+				}
+				if (igInputTextWithHint("##value", hint, bufs[i], sizeof bufs[i],
+				                        t == VAL_NUMBER ? ImGuiInputTextFlags_CharsScientific : 0, NULL, NULL)) {
+					if (t == VAL_NUMBER && bufs[i][0])
+						bad_num[i] = !values_set_typed(v->name, VAL_NUMBER, bufs[i]);
+					else {
+						values_set(v->name, bufs[i]);   /* a text; nothing typed: none */
+						bad_num[i] = false;
+					}
+				}
+				if (bad_num[i]) {
+					igPopStyleVar(1);
+					igPopStyleColor(1);
+					const char *now = values_get(v->name);
+					igSetItemTooltip("Not a number: Play gives %s", now ? now : "nothing");
+				}
+				if (igIsItemActive())
+					active = i;
+				else if (active == i)
+					active = -1;
+			}
 			igTableNextColumn();
 			if (v->set_by[0]) {
 				const cJSON *st = D.root ? place_find(D.root, v->set_by, NULL, NULL) : NULL;
@@ -1861,8 +1932,8 @@ static void values_table(void)
 	}
 	igPushFont(NULL, 14);
 	igPushTextWrapPos(0);
-	igTextColored(colv(C_FAINT), "Play sends these with the file, as the mod's rq.scene.file vars would; the stage "
-	              "shows them. A name with no value shows as written.");
+	igTextColored(colv(C_FAINT), "Play sends these with the file, as the mod's rq.scene.file vars would (a text, a "
+	              "number, true or false); the stage shows them. A name with no value shows as written.");
 	igPopTextWrapPos();
 	igPopFont();
 }
@@ -2365,6 +2436,10 @@ static const char *game_blocked(char *why, size_t n)
 		snprintf(why, n, "The game is paused (rqmod-ctl pause): Play waits for rqmod-ctl resume");
 	} else if (game_scene()) {
 		snprintf(why, n, "A scene plays in the game, or waits to start: Stop it first");
+	} else {
+		char vw[600];
+		if (game_values_why(vw, sizeof vw)[0])
+			snprintf(why, n, "The values for Play: %s", vw);
 	}
 	return why;
 }
@@ -2421,6 +2496,8 @@ static bool game_is(const char *what)
 		return !strcmp(game_lit, what + 6);
 	if (!strcmp(what, "functions"))
 		return game_functions_known();
+	if (!strncmp(what, "version=", 8))
+		return !strcmp(game_version(), what + 8);
 	if (!strcmp(what, "idle"))
 		return st == GAME_READY && !game_scene() && !game_paused();
 	if (!strcmp(what, "waiting"))
@@ -2772,7 +2849,7 @@ static int problem_count(void)
 
 static bool panel_open(int n)
 {
-	return !problems_folded && (n > 0 || panel_tab == 1);
+	return !problems_folded && (n > 0 || panel_tab != 0);
 }
 
 /* A problem's place clicked: its step or row, or its cast entry. */
@@ -2958,6 +3035,293 @@ static void log_list(void)
 		igTextColored(colv(C_FAINT), mod ? "No line of %s in the game's log yet." : "The game's log is empty.", mod ? mod : "");
 }
 
+/* ---- Find: a text in every line of the mod's scene files ---- */
+
+#define FOUND_MAX 500
+
+struct found {
+	char rel[512];
+	char place[256];   /* a step's or a row's place, or cast.NAME */
+	char what[64];     /* the field it is in */
+	char text[640];    /* the field on one line, cut around the hit when it is long */
+	int at, len;       /* the hit in text */
+};
+
+static char find_buf[256];
+static bool find_case, find_focus, find_more;
+static struct found *found;
+static int nfound, capfound, found_files, find_cursor = -1;
+static unsigned long long find_key;
+
+/* The other files, read from disk again when they change. */
+struct find_cache { char path[1600]; long long mtime, size; cJSON *root; };
+static struct find_cache *fcache;
+static int nfcache;
+
+static const cJSON *find_read(const struct scene_file *f)
+{
+	struct find_cache *c = NULL;
+	for (int i = 0; i < nfcache && !c; i++)
+		if (!strcmp(fcache[i].path, f->path))
+			c = &fcache[i];
+	if (c && c->mtime == f->mtime && c->size == f->size)
+		return c->root;
+	if (!c) {
+		fcache = realloc(fcache, (size_t)(nfcache + 1) * sizeof *fcache);
+		c = &fcache[nfcache++];
+		memset(c, 0, sizeof *c);
+		snprintf(c->path, sizeof c->path, "%s", f->path);
+	}
+	cJSON_Delete(c->root);
+	c->root = NULL;
+	c->mtime = f->mtime;
+	c->size = f->size;
+	char why[256];
+	if (!scene_read(f->path, &c->root, NULL, NULL, why, sizeof why))
+		c->root = NULL;
+	return c->root;
+}
+
+/* Where the text is in s (letters in either case unless Match case), or -1. */
+static int find_in(const char *s)
+{
+	size_t nl = strlen(find_buf);
+	for (const char *p = s; *p; p++) {
+		size_t k = 0;
+		while (k < nl && p[k] && (find_case ? p[k] == find_buf[k]
+		                                    : tolower((unsigned char)p[k]) == tolower((unsigned char)find_buf[k])))
+			k++;
+		if (k == nl)
+			return (int)(p - s);
+	}
+	return -1;
+}
+
+struct find_walk { const char *rel; bool counted; };
+
+static void find_add(struct find_walk *w, const char *place, const char *what, const char *s)
+{
+	int at = s ? find_in(s) : -1;
+	if (at < 0)
+		return;
+	if (nfound >= FOUND_MAX) {
+		find_more = true;
+		return;
+	}
+	if (nfound == capfound) {
+		capfound = capfound ? capfound * 2 : 64;
+		found = realloc(found, (size_t)capfound * sizeof *found);
+	}
+	struct found *f = &found[nfound++];
+	snprintf(f->rel, sizeof f->rel, "%s", w->rel);
+	snprintf(f->place, sizeof f->place, "%s", place);
+	snprintf(f->what, sizeof f->what, "%s", what);
+	/* From a little before the hit when it is far in, on one line. */
+	int start = at > 240 ? at - 200 : 0;
+	while (start > 0 && ((unsigned char)s[start] & 0xC0) == 0x80)
+		start++;
+	size_t k = 0;
+	if (start) {
+		memcpy(f->text, "\xE2\x80\xA6", 3);
+		k = 3;
+	}
+	for (const char *p = s + start; *p && k + 1 < sizeof f->text - 4; p++)
+		f->text[k++] = *p == '\n' || *p == '\r' || *p == '\t' ? ' ' : *p;
+	/* Not in the middle of a letter at the end. */
+	size_t j = k;
+	while (j > 0 && ((unsigned char)f->text[j - 1] & 0xC0) == 0x80)
+		j--;
+	if (j > 0) {
+		unsigned char lead = (unsigned char)f->text[j - 1];
+		size_t len = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+		if (j - 1 + len > k)
+			k = j - 1;
+	}
+	f->text[k] = 0;
+	f->at = at - start + (start ? 3 : 0);
+	f->len = (int)strlen(find_buf);
+	if (f->at > (int)k)
+		f->at = (int)k;
+	if (f->at + f->len > (int)k)
+		f->len = (int)k - f->at;
+	if (!w->counted) {
+		w->counted = true;
+		found_files++;
+	}
+}
+
+static void find_value(struct find_walk *w, const char *place, const char *what, const cJSON *v)
+{
+	if (cJSON_IsString(v))
+		find_add(w, place, what, v->valuestring);
+	else if (cJSON_IsArray(v) || cJSON_IsObject(v))
+		for (const cJSON *c = v->child; c; c = c->next)
+			find_value(w, place, cJSON_IsObject(v) && c->string ? c->string : what, c);
+}
+
+/* A step's texts and values; its branches' steps come on their own (steps_each). */
+static void find_step(cJSON *st, const char *place, void *ud)
+{
+	struct find_walk *w = ud;
+	const char *kind = step_kind(st);
+	for (const cJSON *m = cJSON_IsObject(st) ? st->child : NULL; m; m = m->next) {
+		const char *k = m->string ? m->string : "";
+		if (kind && !strcmp(kind, "if") && (!strcmp(k, "then") || !strcmp(k, "else")))
+			continue;
+		if (kind && !strcmp(kind, "choice") && !strcmp(k, "choice") && cJSON_IsArray(m)) {
+			int r = 0;
+			for (const cJSON *row = m->child; row; row = row->next, r++) {
+				char rp[300];
+				snprintf(rp, sizeof rp, "%s.choice[%d]", place, r);
+				if (cJSON_IsString(row))
+					find_add(w, rp, "text", row->valuestring);
+				for (const cJSON *f = cJSON_IsObject(row) ? row->child : NULL; f; f = f->next)
+					if (f->string && strcmp(f->string, "steps"))
+						find_value(w, rp, f->string, f);
+			}
+			continue;
+		}
+		find_value(w, place, k, m);
+	}
+}
+
+static void find_file(struct find_walk *w, const cJSON *root)
+{
+	cJSON *steps = cJSON_GetObjectItemCaseSensitive(root, "steps");
+	if (cJSON_IsArray(steps))
+		steps_each(steps, "steps", find_step, w);
+	const cJSON *cast = cJSON_GetObjectItemCaseSensitive(root, "cast");
+	for (const cJSON *e = cJSON_IsObject(cast) ? cast->child : NULL; e; e = e->next) {
+		char cp[200];
+		snprintf(cp, sizeof cp, "cast.%s", e->string ? e->string : "");
+		find_add(w, cp, "cast", e->string);
+		find_value(w, cp, "cast", e);
+	}
+}
+
+/* The hits again when the text, the files or the open file changed. */
+static void find_run(void)
+{
+	unsigned long long k = 1469598103934665603ULL;
+#define MIX(x) (k = (k ^ (unsigned long long)(x)) * 1099511628211ULL)
+	for (const char *p = find_buf; *p; p++)
+		MIX((unsigned char)*p);
+	MIX(find_case);
+	MIX(cur_mod + 7);
+	MIX(NFILES);
+	for (int i = 0; i < NFILES; i++) {
+		MIX(FILES[i].mtime);
+		MIX(FILES[i].size);
+	}
+	MIX(D.open && D.root ? problems_doc_hash() : 0);
+	for (const char *p = D.rel; *p; p++)
+		MIX((unsigned char)*p);
+#undef MIX
+	if (k == find_key)
+		return;
+	find_key = k;
+	nfound = found_files = 0;
+	find_more = false;
+	find_cursor = -1;
+	if (!find_buf[0])
+		return;
+	for (int i = 0; i < NFILES; i++) {
+		bool open = D.open && D.root && !strcmp(FILES[i].rel, D.rel);
+		const cJSON *root = open ? D.root : find_read(&FILES[i]);
+		if (!root)
+			continue;
+		struct find_walk w = { FILES[i].rel, false };
+		find_file(&w, root);
+	}
+}
+
+static void find_open(void)
+{
+	problems_folded = false;
+	panel_tab = 2;
+	find_focus = true;
+}
+
+/* A hit clicked: its file opened (or the open one), its step, row or cast entry selected. */
+static void find_go(int i)
+{
+	if (i < 0 || i >= nfound)
+		return;
+	find_cursor = i;
+	log_go(found[i].rel, found[i].place);
+}
+
+static void find_list(void)
+{
+	find_run();
+	const struct mod *m = mod_now();
+	igPushTextWrapPos(0);
+	if (!find_buf[0]) {
+		igTextColored(colv(C_FAINT), "Type above: the text is looked for in every line, name plate, row, comment and value "
+		              "of %s's scene files, the open one as it is now. Enter goes to the next.", m ? m->id : "the mod");
+		igPopTextWrapPos();
+		return;
+	}
+	if (!nfound) {
+		igTextColored(colv(C_FAINT), "\"%s\" is in none of %s's %d scene files.", find_buf, m ? m->id : "the mod", NFILES);
+		igPopTextWrapPos();
+		return;
+	}
+	igPopTextWrapPos();
+	float lh = igGetTextLineHeight() + S(6), rw = S(230), pw = S(250);
+	ImDrawList *dl = igGetWindowDrawList();
+	ImGuiListClipper *clip = ImGuiListClipper_ImGuiListClipper();
+	ImGuiListClipper_Begin(clip, nfound + (find_more ? 1 : 0), lh);
+	while (ImGuiListClipper_Step(clip)) {
+		for (int j = clip->DisplayStart; j < clip->DisplayEnd; j++) {
+			if (j >= nfound) {
+				igTextColored(colv(C_FAINT), "Only the first %d are listed: a longer text finds fewer.", FOUND_MAX);
+				continue;
+			}
+			const struct found *f = &found[j];
+			igPushID_Int(j);
+			V2 p = igGetCursorScreenPos();
+			float w = igGetContentRegionAvail().x;
+			if (igSelectable_Bool("##f", j == find_cursor, 0, v2(w, lh)))
+				find_go(j);
+			bool hov = igIsItemHovered(0);
+			float my = p.y + (lh - fs(13)) / 2, y = p.y + (lh - igGetFontSize()) / 2;
+			bool here = D.open && !strcmp(f->rel, D.rel);
+			draw_text(dl, F_MONO, fs(13), v2(p.x + S(4), my), col(here ? C_DIM : C_FAINT), f->rel, p.x + rw - S(8));
+			char at[340];
+			snprintf(at, sizeof at, "%s \xC2\xB7 %s", f->place, f->what);
+			draw_text(dl, F_MONO, fs(13), v2(p.x + rw, my), col(C_FAINT), at, p.x + rw + pw - S(8));
+			/* The field's text with its hit marked, moved left when the hit is far in. */
+			float x = p.x + rw + pw, avail = p.x + w - S(6) - x;
+			const char *t = f->text;
+			char shown[700];
+			int at_hit = f->at;
+			if (avail > S(40) && ImFont_CalcTextSizeA(F_UI, igGetFontSize(), FLT_MAX, 0, t, t + f->at, NULL).x > avail * 0.45f) {
+				int s0 = 0;
+				while (s0 < f->at && ImFont_CalcTextSizeA(F_UI, igGetFontSize(), FLT_MAX, 0, t + s0, t + f->at, NULL).x > avail * 0.35f) {
+					s0++;
+					while (s0 < f->at && ((unsigned char)t[s0] & 0xC0) == 0x80)
+						s0++;
+				}
+				snprintf(shown, sizeof shown, "\xE2\x80\xA6%s", t + s0);
+				t = shown;
+				at_hit = f->at - s0 + 3;
+			}
+			float hx = x + ImFont_CalcTextSizeA(F_UI, igGetFontSize(), FLT_MAX, 0, t, t + at_hit, NULL).x;
+			float hw = ImFont_CalcTextSizeA(F_UI, igGetFontSize(), FLT_MAX, 0, t + at_hit, t + at_hit + f->len, NULL).x;
+			if (hx < x + avail)
+				ImDrawList_AddRectFilled(dl, v2(hx - S(1), p.y + S(3)), v2(fminf(hx + hw + S(1), x + avail), p.y + lh - S(3)),
+				                         col_a(C_ACCENT, 0.32f), S(3), 0);
+			draw_text(dl, F_UI, igGetFontSize(), v2(x, y), col(C_TEXT), t, x + avail);
+			if (hov)
+				igSetTooltip("Click: go to it%s\n%s", here ? "" : " (opens the file)", f->text);
+			igPopID();
+		}
+	}
+	ImGuiListClipper_End(clip);
+	ImGuiListClipper_destroy(clip);
+}
+
 static bool tab_button(const char *label, bool on, ImU32 ink)
 {
 	igPushStyleColor_Vec4(ImGuiCol_Button, on ? colv(C_RAISE) : v4(0, 0, 0, 0));
@@ -3005,9 +3369,40 @@ static void bottom_panel(float tabs_h, float panel_h)
 	}
 	if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
 		igSetTooltip("The lines the game writes for this mod (logs/rqmod.log in the game's folder), as they come");
+	igSameLine(0, S(6));
+	if (find_buf[0])
+		snprintf(label, sizeof label, "%s  Find  %d%s###find", open && panel_tab == 2 ? "\xE2\x96\xBE" : "\xE2\x96\xB4",
+		         nfound, find_more ? "+" : "");
+	else
+		snprintf(label, sizeof label, "%s  Find###find", open && panel_tab == 2 ? "\xE2\x96\xBE" : "\xE2\x96\xB4");
+	if (tab_button(label, open && panel_tab == 2, col(C_TEXT))) {
+		if (open && panel_tab == 2)
+			problems_folded = true;
+		else
+			find_open();
+	}
+	if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+		igSetTooltip("A text in every line of the mod's scene files (Ctrl+F)");
 	if (open && panel_tab == 1) {
 		igSameLine(0, S(14));
 		igCheckbox("Every line, not only this mod's", &log_all);
+	}
+	if (open && panel_tab == 2) {
+		igSameLine(0, S(14));
+		igSetNextItemWidth(S(280));
+		if (find_focus) {
+			igSetKeyboardFocusHere(0);
+			find_focus = false;
+		}
+		if (igInputTextWithHint("##find", "Find in the mod's scenes", find_buf, sizeof find_buf,
+		                        ImGuiInputTextFlags_EnterReturnsTrue, NULL, NULL)) {
+			find_run();
+			if (nfound)
+				find_go((find_cursor + 1) % nfound);
+			igSetKeyboardFocusHere(-1);
+		}
+		igSameLine(0, S(10));
+		igCheckbox("Match case", &find_case);
 	}
 	const char *msg;
 	ImVec4_c mc;
@@ -3041,10 +3436,13 @@ static void bottom_panel(float tabs_h, float panel_h)
 	if (open) {
 		igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, v2(S(12), S(6)));
 		igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, v2(S(8), 0));
-		igBeginChild_Str(panel_tab == 1 ? "##log" : "##problems", v2(0, panel_h), ImGuiChildFlags_AlwaysUseWindowPadding, 0);
+		igBeginChild_Str(panel_tab == 1 ? "##log" : panel_tab == 2 ? "##find" : "##problems", v2(0, panel_h),
+		                 ImGuiChildFlags_AlwaysUseWindowPadding, 0);
 		igPopStyleVar(2);
 		if (panel_tab == 1)
 			log_list();
+		else if (panel_tab == 2)
+			find_list();
 		else
 			problems_list();
 		igEndChild();
@@ -3067,7 +3465,8 @@ static void status_line(float h)
 		igTextColored(colv(C_FAINT), "(%s)", EDITOR_BUILD_NOTE);
 	}
 	igSameLine(0, S(16));
-	igTextColored(colv(C_FAINT), "%s \xC2\xB7 %s", game_title, game_dir);
+	char gd[1100];
+	igTextColored(colv(C_FAINT), "%s \xC2\xB7 %s", game_title, path_shown(game_dir, gd, sizeof gd));
 	if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
 		igSetTooltip("Click to open another game folder");
 	if (igIsItemClicked(ImGuiMouseButton_Left) && !UI.shot) {
@@ -3369,9 +3768,9 @@ bool ui_do(const char *action)
 		           : !strcmp(arg, "changed") ? M_CHANGED : !strcmp(arg, "new") ? M_NEW : M_NONE;
 	else if (!strcmp(name, "fold"))
 		problems_folded = !problems_folded;
-	else if (!strcmp(name, "panel")) {   /* panel=problems|log: the bottom panel open on that tab */
+	else if (!strcmp(name, "panel")) {   /* panel=problems|log|logall|find: the bottom panel open on that tab */
 		problems_folded = false;
-		panel_tab = !strcmp(arg, "log") ? 1 : 0;
+		panel_tab = !strcmp(arg, "log") ? 1 : !strcmp(arg, "find") ? 2 : 0;
 		log_all = !strcmp(arg, "logall");
 		if (log_all)
 			panel_tab = 1;
@@ -3403,6 +3802,40 @@ bool ui_do(const char *action)
 	} else if (!strcmp(name, "loglink")) {   /* loglink=N: the log tab's Nth line clicked (one that names a place) */
 		gamelog_poll(0, true);
 		return log_click(atoi(arg));
+	} else if (!strcmp(name, "search")) {   /* search=TEXT: Find open with that text */
+		find_open();
+		find_focus = false;
+		snprintf(find_buf, sizeof find_buf, "%s", arg);
+		find_run();
+	} else if (!strcmp(name, "findcase")) {   /* findcase=on|off: Match case */
+		find_case = !strcmp(arg, "on");
+		find_run();
+	} else if (!strcmp(name, "printfound")) {   /* Find's hits, on stdout */
+		find_run();
+		printf("found %d in %d file%s%s\n", nfound, found_files, found_files == 1 ? "" : "s", find_more ? " (more)" : "");
+		for (int i = 0; i < nfound; i++)
+			printf("%s | %s | %s | %.*s[%.*s]%s\n", found[i].rel, found[i].place, found[i].what, found[i].at, found[i].text,
+			       found[i].len, found[i].text + found[i].at, found[i].text + found[i].at + found[i].len);
+		fflush(stdout);
+	} else if (!strcmp(name, "foundgo")) {   /* foundgo=N: Find's Nth hit clicked */
+		find_run();
+		int i = atoi(arg);
+		if (i < 0 || i >= nfound)
+			return false;
+		find_go(i);
+	} else if (!strcmp(name, "printsel")) {   /* the open file and what is selected, on stdout */
+		bool cast = want_mid_tab >= 0 ? want_mid_tab == 1 : cast_tab_shown;
+		printf("sel %s %s\n", D.open ? D.rel : "-", cast ? (cast_sel[0] ? cast_sel : "cast") : UI.sel[0] ? UI.sel : "-");
+		fflush(stdout);
+	} else if (!strcmp(name, "key")) {   /* key=F5|F6|shift+F5|ctrl+F: as the keys do */
+		if (!strcmp(arg, "F5") || !strcmp(arg, "F6"))
+			game_key(arg[1] == '6');
+		else if (!strcmp(arg, "shift+F5"))
+			game_key(2);
+		else if (!strcmp(arg, "ctrl+F"))
+			find_open();
+		else
+			return false;
 	} else if (!strcmp(name, "game")) {   /* the game asked for: a shot does not ask it otherwise */
 		game_enable(true);
 	} else if (!strcmp(name, "pipe")) {   /* pipe=NAME: another pipe than rqmod's */
@@ -3476,21 +3909,42 @@ bool ui_do(const char *action)
 		for (int i = 0; game_functions_known() && i < game_function_count(); i++)
 			printf("function %s\n", game_function(i));
 		fflush(stdout);
-	} else if (!strcmp(name, "value")) {   /* value=NAME=TEXT: the value Play gives {NAME} (TEXT "": none) */
-		const char *e = strchr(arg, '=');
-		if (!e || e == arg || e - arg >= 64)
+	} else if (!strcmp(name, "value")) {
+		/* value=NAME=TEXT (a text; "": none), value=NAME:number=5, value=NAME:text=5,
+		 * value=NAME:true, value=NAME:false, value=NAME:none: the value Play gives {NAME}. */
+		size_t nl = strcspn(arg, ":=");
+		if (!nl || nl >= 64 || !arg[nl])
 			return false;
 		char nm[64];
-		snprintf(nm, sizeof nm, "%.*s", (int)(e - arg), arg);
-		values_set(nm, e + 1);
-		return true;
+		snprintf(nm, sizeof nm, "%.*s", (int)nl, arg);
+		const char *rest = arg + nl;
+		if (*rest == '=') {
+			values_set(nm, rest + 1);
+			return true;
+		}
+		static const char *const tn[] = { "none", "text", "number", "true", "false" };
+		const char *t = rest + 1;
+		size_t tl = strcspn(t, "=");
+		for (int k = 0; k < 5; k++)
+			if (strlen(tn[k]) == tl && !strncmp(t, tn[k], tl))
+				return values_set_typed(nm, k, t[tl] == '=' ? t + tl + 1 : "");
+		return false;
 	} else if (!strcmp(name, "printvalues")) {   /* the file's {name}s and their values for Play, on stdout */
 		static struct value_name vn[128];
 		int n = values_names(NULL, vn, 128);
 		printf("values %d\n", n);
+		static const char *const tn[] = { "-", "text", "number", "true", "false" };
 		for (int i = 0; i < n; i++) {
-			const char *v = values_get(vn[i].name);
-			printf("{%s} | %s | %s | %d\n", vn[i].name, v ? v : "-", vn[i].set_by[0] ? vn[i].set_by : "-", vn[i].uses);
+			int t = values_type(vn[i].name);
+			char v[400];
+			if (t == VAL_TEXT || t == VAL_NUMBER)
+				snprintf(v, sizeof v, "%s %s", tn[t], values_get(vn[i].name));
+			else
+				snprintf(v, sizeof v, "%s", tn[t]);
+			char word[700];
+			bool quoted;
+			printf("{%s} | %s | %s | %d | %s\n", vn[i].name, v, vn[i].set_by[0] ? vn[i].set_by : "-", vn[i].uses,
+			       values_word(vn[i].name, word, sizeof word, &quoted) ? word : "-");
 		}
 		fflush(stdout);
 	} else if (!strcmp(name, "goproblem")) {   /* goproblem=N: the Nth problem clicked */

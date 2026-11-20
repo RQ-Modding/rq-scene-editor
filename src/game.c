@@ -8,10 +8,12 @@
  *   facts               RQ MOD's version, once a game answers
  *   scenefunctions MOD  the functions the open mod gave rq.scene.functions (every 10 s)
  *   playscene status    what plays (every 4 s; every 0.4 s while a scene plays or waits)
- * and, on the buttons, playscene MOD FILE [FROM] [name=value ...] and playscene stop. */
+ * and, on the buttons, playscene MOD FILE [FROM] [name=value ...] and playscene stop. Each answer
+ * says which process gave it: another one is the game started again, asked everything anew. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +29,7 @@ static bool connected;            /* a game answered the last time it was asked 
 static char silent[200];          /* why the game did not answer, while it does not */
 static bool paused;               /* rqmod-ctl pause: commands that need a frame wait */
 static char version[32];
+static unsigned long game_pid;     /* the game's process: another one is a game started again */
 static bool version_asked, old;
 static int inflight;              /* polls asked and not answered */
 static double next_mods, next_funcs, next_status;
@@ -168,6 +171,7 @@ static void forget_game(void)
 	nplays = 0;
 	waiting = false;
 	stopping = false;
+	game_pid = 0;
 }
 
 static void send(int tag, const char *line)
@@ -177,6 +181,16 @@ static void send(int tag, const char *line)
 }
 
 /* ---- the answers ---- */
+
+/* The game sends a folder in the ANSI code page when it is not ASCII: as UTF-8 for the window. */
+static void to_utf8(char *s, size_t n)
+{
+	if (!*s || MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0))
+		return;
+	wchar_t w[1100];
+	if (MultiByteToWideChar(CP_ACP, 0, s, -1, w, 1100))
+		WideCharToMultiByte(CP_UTF8, 0, w, -1, s, (int)n, NULL, NULL);
+}
 
 static void on_mods(const char *text)
 {
@@ -192,6 +206,7 @@ static void on_mods(const char *text)
 			continue;
 		mod_loaded = true;
 		snprintf(mod_game_dir, sizeof mod_game_dir, "%s", cJSON_IsString(path) ? path->valuestring : "");
+		to_utf8(mod_game_dir, sizeof mod_game_dir);
 		mod_same = open_dir[0] && same_folder(mod_game_dir, open_dir);
 	}
 	cJSON_Delete(j);
@@ -386,6 +401,15 @@ static void on_answer(struct pipe_answer *a, double now)
 		return;
 	}
 	const char *t = a->text ? a->text : "";
+	if (a->pid) {
+		/* Another process: the game was started again between two questions. All asked anew. */
+		if (game_pid && a->pid != game_pid) {
+			forget_game();
+			next_mods = now;
+			ui_status("The game was started again: the editor asks it anew");
+		}
+		game_pid = a->pid;
+	}
 	if (!connected) {
 		connected = true;
 		next_status = 0;
@@ -590,6 +614,49 @@ static size_t put_word(char *out, size_t n, size_t o, const char *w)
 	return o;
 }
 
+/* The values for Play after a playscene line's FILE and FROM: false and why when one cannot go. */
+static bool values_words(char *line, size_t ln, size_t *o, char *why, size_t wn)
+{
+	struct value_name names[128];
+	int n = values_names(NULL, names, 128);
+	for (int i = 0; i < n; i++) {
+		char w[700];
+		bool quoted;
+		if (!values_word(names[i].name, w, sizeof w, &quoted))
+			continue;
+		if (!word_ok(w)) {
+			snprintf(why, wn, "the value of {%s} has a double quote or a line break: the game's pipe cannot take it",
+			         names[i].name);
+			return false;
+		}
+		if (quoted && version[0] && version_cmp(version, "2.62.1") < 0) {
+			snprintf(why, wn, "{%s} is the text \"%s\", which RQ MOD %s reads as a number, true or false (or a text "
+			         "without its quotes): sending it as a text needs RQ MOD 2.62.1; or give {%s} as a Number, true or false",
+			         names[i].name, values_get(names[i].name), version, names[i].name);
+			return false;
+		}
+		*o = put_word(line, ln, *o, w);
+	}
+	if (*o >= ln || strlen(line) > pipe_line_max()) {
+		snprintf(why, wn, "the command is %zu bytes: the game's pipe takes %zu (shorter values)", strlen(line), pipe_line_max());
+		return false;
+	}
+	return true;
+}
+
+const char *game_values_why(char *why, size_t wn)
+{
+	why[0] = 0;
+	char line[2048];
+	size_t o = (size_t)snprintf(line, sizeof line, "playscene");
+	o = put_word(line, sizeof line, o, open_mod);
+	o = put_word(line, sizeof line, o, open_rel);
+	o = put_word(line, sizeof line, o, "steps[0].choice[0].steps[0]");   /* room for a long From here */
+	if (!values_words(line, sizeof line, &o, why, wn) && !why[0])
+		snprintf(why, wn, "the values cannot be sent");
+	return why;
+}
+
 bool game_play(const char *from, unsigned long long hash, char *why, size_t wn)
 {
 	if (!open_mod[0] || !open_rel[0]) {
@@ -610,25 +677,8 @@ bool game_play(const char *from, unsigned long long hash, char *why, size_t wn)
 	}
 	if (from && from[0])
 		o = put_word(line, sizeof line, o, from);
-	struct value_name names[128];
-	int n = values_names(NULL, names, 128);
-	for (int i = 0; i < n; i++) {
-		const char *v = values_get(names[i].name);
-		if (!v)
-			continue;
-		if (!word_ok(v)) {
-			snprintf(why, wn, "the value of {%s} has a double quote or a line break: the game's pipe cannot take it",
-			         names[i].name);
-			return false;
-		}
-		char w[700];
-		snprintf(w, sizeof w, "%s=%s", names[i].name, v);
-		o = put_word(line, sizeof line, o, w);
-	}
-	if (o >= sizeof line || strlen(line) > pipe_line_max()) {
-		snprintf(why, wn, "the command is %zu bytes: the game's pipe takes %zu (shorter values)", strlen(line), pipe_line_max());
+	if (!values_words(line, sizeof line, &o, why, wn))
 		return false;
-	}
 	if (!pipe_send(T_PLAY, line)) {
 		snprintf(why, wn, "the editor's queue to the game is full");
 		return false;
@@ -692,12 +742,14 @@ void game_pill(char *out, size_t n, int *colour, char *tip, size_t tn)
 		         "the game have what its mod.json asks for? The game's log says why (Game log, every line).",
 		         version, open_mod);
 		return;
-	case GAME_OTHER_DIR:
+	case GAME_OTHER_DIR: {
 		*colour = C_WARN;
+		char a[1100], b[1100];
 		snprintf(out, n, "Game running \xC2\xB7 %s from another folder", open_mod);
 		snprintf(tip, tn, "The game runs %s from %s, not from the folder the editor has open (%s): Play would "
-		         "play that copy.", open_mod, mod_game_dir, open_dir);
+		         "play that copy.", open_mod, path_shown(mod_game_dir, a, sizeof a), path_shown(open_dir, b, sizeof b));
 		return;
+	}
 	}
 	const char *pm, *pf, *pp;
 	if (paused) {
@@ -738,7 +790,7 @@ void game_pill(char *out, size_t n, int *colour, char *tip, size_t tn)
 static cJSON *mem_values;   /* --shot: kept in memory, not in the settings */
 static unsigned values_generation = 1;
 
-/* play_values -> mod -> file -> name -> text. */
+/* play_values -> mod -> file -> name -> a text, a number, true or false. */
 static cJSON *values_root(bool make)
 {
 	cJSON *tree = UI.shot ? NULL : settings_tree();
@@ -777,57 +829,170 @@ static cJSON *values_of(const char *mod, const char *rel, bool make)
 	return f;
 }
 
-const char *values_get_for(const char *mod, const char *rel, const char *name)
+static const cJSON *value_item(const char *mod, const char *rel, const char *name)
 {
-	cJSON *v = cJSON_GetObjectItemCaseSensitive(values_of(mod, rel, false), name);
-	return cJSON_IsString(v) && v->valuestring[0] ? v->valuestring : NULL;
+	const cJSON *v = cJSON_GetObjectItemCaseSensitive(values_of(mod, rel, false), name);
+	return cJSON_IsString(v) || cJSON_IsNumber(v) || cJSON_IsBool(v) ? v : NULL;
 }
 
 /* The open file's: the window's mod and file, known before the game is asked anything. */
+static const cJSON *value_now(const char *name)
+{
+	return D.open ? value_item(ui_mod_id(), D.rel, name) : NULL;
+}
+
+/* A number as the scene's fill shows it: a whole one with no point, else Lua's %.14g. */
+static void number_shown(double d, char *out, size_t n)
+{
+	if (d == floor(d) && d > -1e15 && d < 1e15)
+		snprintf(out, n, "%.0f", d);
+	else
+		snprintf(out, n, "%.14g", d);
+}
+
+static const char *value_text(const cJSON *v)
+{
+	static char ring[8][64];
+	static int at;
+	if (!v)
+		return NULL;
+	if (cJSON_IsString(v))
+		return v->valuestring;
+	if (cJSON_IsBool(v))
+		return cJSON_IsTrue(v) ? "true" : "false";
+	char *b = ring[at++ & 7];
+	number_shown(v->valuedouble, b, 64);
+	return b;
+}
+
+const char *values_get_for(const char *mod, const char *rel, const char *name)
+{
+	return value_text(value_item(mod, rel, name));
+}
+
 const char *values_get(const char *name)
 {
-	return D.open ? values_get_for(ui_mod_id(), D.rel, name) : NULL;
+	return value_text(value_now(name));
+}
+
+int values_type(const char *name)
+{
+	const cJSON *v = value_now(name);
+	return !v ? VAL_NONE : cJSON_IsString(v) ? VAL_TEXT : cJSON_IsNumber(v) ? VAL_NUMBER : cJSON_IsTrue(v) ? VAL_TRUE : VAL_FALSE;
+}
+
+/* A number typed: the whole text, finite. */
+static bool number_of(const char *s, double *d)
+{
+	while (*s == ' ')
+		s++;
+	if (!*s)
+		return false;
+	char *end = NULL;
+	*d = strtod(s, &end);
+	while (end && *end == ' ')
+		end++;
+	return end && !*end && isfinite(*d);
+}
+
+bool values_set_typed(const char *name, int type, const char *text)
+{
+	if (!D.open)
+		return false;
+	cJSON *nv = NULL;
+	double d = 0;
+	switch (type) {
+	case VAL_TEXT: nv = cJSON_CreateString(text ? text : ""); break;
+	case VAL_NUMBER:
+		if (!number_of(text ? text : "", &d))
+			return false;
+		nv = cJSON_CreateNumber(d);
+		break;
+	case VAL_TRUE: nv = cJSON_CreateTrue(); break;
+	case VAL_FALSE: nv = cJSON_CreateFalse(); break;
+	}
+	const cJSON *old_v = value_now(name);
+	if ((!old_v && !nv) || (old_v && nv && cJSON_Compare(old_v, nv, true))) {
+		cJSON_Delete(nv);
+		return true;
+	}
+	cJSON *f = values_of(ui_mod_id(), D.rel, nv != NULL);
+	if (!f) {
+		cJSON_Delete(nv);
+		return true;
+	}
+	cJSON_DeleteItemFromObjectCaseSensitive(f, name);
+	if (nv)
+		cJSON_AddItemToObject(f, name, nv);
+	values_generation++;
+	if (!UI.shot && settings_tree())
+		settings_save();
+	return true;
 }
 
 void values_set(const char *name, const char *text)
 {
-	if (!D.open)
-		return;
-	cJSON *f = values_of(ui_mod_id(), D.rel, text && text[0]);
-	if (!f)
-		return;
-	const char *old_v = values_get(name);
-	if ((!old_v && (!text || !text[0])) || (old_v && text && !strcmp(old_v, text)))
-		return;
-	cJSON_DeleteItemFromObjectCaseSensitive(f, name);
-	if (text && text[0])
-		cJSON_AddStringToObject(f, name, text);
-	values_generation++;
-	if (!UI.shot && settings_tree())
-		settings_save();
+	values_set_typed(name, text && text[0] ? VAL_TEXT : VAL_NONE, text);
+}
+
+/* A text RQ MOD's playscene would type as something else: a whole number, a number with a point,
+ * true, false, or a text in single quotes (whose quotes it takes off). */
+static bool text_needs_quotes(const char *s)
+{
+	size_t n = strlen(s);
+	if (!strcmp(s, "true") || !strcmp(s, "false"))
+		return true;
+	if (n >= 2 && s[0] == '\'' && s[n - 1] == '\'')
+		return true;
+	const char *p = s + (*s == '-');
+	size_t digits = strspn(p, "0123456789");
+	if (digits && !p[digits])
+		return true;
+	if (digits && p[digits] == '.') {
+		size_t more = strspn(p + digits + 1, "0123456789");
+		if (more && !p[digits + 1 + more])
+			return true;
+	}
+	return false;
+}
+
+bool values_word(const char *name, char *out, size_t n, bool *quoted)
+{
+	const cJSON *v = value_now(name);
+	*quoted = false;
+	if (!v)
+		return false;
+	if (cJSON_IsString(v)) {
+		*quoted = text_needs_quotes(v->valuestring);
+		snprintf(out, n, *quoted ? "%s='%s'" : "%s=%s", name, v->valuestring);
+	} else if (cJSON_IsBool(v)) {
+		snprintf(out, n, "%s=%s", name, cJSON_IsTrue(v) ? "true" : "false");
+	} else {
+		/* A whole number as digits (a whole number in the game), else digits with a point. */
+		double d = v->valuedouble;
+		char num[400];
+		if (d == floor(d) && d > -9e18 && d < 9e18) {
+			snprintf(num, sizeof num, "%.0f", d);
+		} else {
+			/* The shortest that reads back the same, never with an exponent (the game takes digits). */
+			snprintf(num, sizeof num, "%.15g", d);
+			if (strtod(num, NULL) != d)
+				snprintf(num, sizeof num, "%.17g", d);
+			if (strchr(num, 'e') || strchr(num, 'E')) {
+				snprintf(num, sizeof num, "%.20f", d);
+				size_t k = strlen(num);
+				while (k > 2 && num[k - 1] == '0' && num[k - 2] != '.')
+					num[--k] = 0;
+			}
+		}
+		snprintf(out, n, "%s=%s", name, num);
+	}
+	return true;
 }
 
 unsigned values_gen(void)
 {
 	return values_generation;
-}
-
-/* A value as the game shows it: playscene makes 5 a whole number, 2.50 the number 2.5. */
-static const char *shown_value(const char *v, char *buf, size_t n)
-{
-	const char *p = v + (*v == '-');
-	const char *dot = strchr(p, '.');
-	if (!dot || dot == p || !dot[1])
-		return v;
-	for (const char *q = p; *q; q++)
-		if (!isdigit((unsigned char)*q) && q != dot)
-			return v;
-	double d = atof(v);
-	if (d == (double)(long long)d && d > -1e15 && d < 1e15)
-		snprintf(buf, n, "%.0f", d);
-	else
-		snprintf(buf, n, "%.14g", d);
-	return buf;
 }
 
 const char *values_fill(const char *s)
@@ -855,7 +1020,6 @@ const char *values_fill(const char *s)
 		}
 		const char *add = NULL;
 		size_t addn = 0, skip = 1;
-		char num[64];
 		if (p[0] == '{' && (isalpha((unsigned char)p[1]) || p[1] == '_')) {
 			const char *b = p + 1;
 			while (isalnum((unsigned char)*b) || *b == '_')
@@ -865,7 +1029,7 @@ const char *values_fill(const char *s)
 				snprintf(name, sizeof name, "%.*s", (int)(b - p - 1), p + 1);
 				const char *v = values_get(name);
 				if (v) {
-					add = shown_value(v, num, sizeof num);
+					add = v;
 					addn = strlen(add);
 					skip = (size_t)(b - p) + 1;
 				}

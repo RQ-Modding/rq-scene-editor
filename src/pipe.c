@@ -5,8 +5,11 @@
  *
  * The game serves one connection at a time and reads at most 511 bytes of a command: a longer one
  * is refused here. While another program talks to it (rqmod-ctl, an agent), the editor waits its
- * turn a little. */
+ * turn a little. Each answer says which process gave it, so a game started again is known. */
 #define WIN32_LEAN_AND_MEAN
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,22 +38,36 @@ static int next_id, busy_id;
 static wchar_t pipe_name[128] = L"\\\\.\\pipe\\rqmod";
 
 /* One command: PIPE_ANSWER with the text, PIPE_NO_GAME when no game has the pipe, PIPE_NO_ANSWER
- * when it stayed busy or the talk broke. */
-static int talk(const char *line, char **out)
+ * when it stayed busy or the talk broke; *pid the game's process, when it is known. */
+static int talk(const char *line, char **out, unsigned long *pid)
 {
 	*out = NULL;
+	*pid = 0;
 	HANDLE h = INVALID_HANDLE_VALUE;
-	for (int tries = 0; tries < 12; tries++) {
+	DWORD start = GetTickCount();
+	int gaps = 0;
+	for (;;) {
 		h = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
 		if (h != INVALID_HANDLE_VALUE)
 			break;
 		DWORD e = GetLastError();
-		if (e != ERROR_PIPE_BUSY)
+		if (e == ERROR_PIPE_BUSY) {
+			/* Another program's turn: wait for the next pipe, 5 s at most. */
+			if (GetTickCount() - start >= 5000)
+				return PIPE_NO_ANSWER;
+			gaps = 0;
+			WaitNamedPipeW(pipe_name, 250);
+		} else if (e == ERROR_FILE_NOT_FOUND && gaps < 5) {
+			/* The game makes its pipe again after each program: the moment between two. */
+			gaps++;
+			Sleep(20);
+		} else {
 			return PIPE_NO_GAME;
-		WaitNamedPipeW(pipe_name, 250);   /* another program's turn: wait for the next instance */
+		}
 	}
-	if (h == INVALID_HANDLE_VALUE)
-		return PIPE_NO_ANSWER;
+	ULONG server = 0;
+	if (GetNamedPipeServerProcessId(h, &server))
+		*pid = server;
 	char msg[LINE_MAX_GAME + 2];
 	int n = snprintf(msg, sizeof msg, "%s\n", line);
 	DWORD w = 0;
@@ -95,7 +112,8 @@ static int worker(void *unused)
 		SDL_UnlockMutex(mx);
 
 		char *text = NULL;
-		int how = talk(r.line, &text);
+		unsigned long pid = 0;
+		int how = talk(r.line, &text, &pid);
 
 		SDL_LockMutex(mx);
 		if (ndone == QMAX) {   /* nobody took the oldest: dropped */
@@ -107,6 +125,7 @@ static int worker(void *unused)
 		done[ndone].tag = r.tag;
 		done[ndone].how = how;
 		done[ndone].text = text;
+		done[ndone].pid = pid;
 		ndone++;
 		busy_id = 0;
 		SDL_UnlockMutex(mx);

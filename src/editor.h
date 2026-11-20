@@ -484,6 +484,7 @@ struct pipe_answer {
 	int id, tag;
 	int how;       /* PIPE_*: an answer, no game has the pipe, or it stayed busy or broke */
 	char *text;    /* the answer without its last line end (malloc'd), or NULL */
+	unsigned long pid;   /* the game's process, 0 when unknown */
 };
 
 /* A command queued (a line of RQ MOD's words): its id, or 0 when it is too long or the queue is
@@ -516,6 +517,9 @@ bool game_playing_now(const char **mod, const char **file, const char **place);
 /* Play the open file (saved): from a place or label (NULL: the top), with the values for Play;
  * hash is the file's JSON as it is now, for what the game may refuse. */
 bool game_play(const char *from, unsigned long long hash, char *why, size_t n);
+/* Whether the values for Play can be sent to this game (a text that reads as a number needs RQ MOD
+ * 2.62.1, the line has a length): "" or why not. */
+const char *game_values_why(char *why, size_t n);
 void game_stop(void);
 /* The open mod's functions (rq.scene.functions), known while the game runs it from this folder. */
 bool game_functions_known(void);
@@ -528,7 +532,10 @@ int game_refusal(const char *mod, const char *rel, unsigned long long hash, cons
 /* The pill in the top bar: its text, its colour (enum col) and its tip. */
 void game_pill(char *out, size_t n, int *colour, char *tip, size_t tn);
 
-/* The values Play gives a file's {name}s (kept in the settings per mod and file). */
+/* The values Play gives a file's {name}s (kept in the settings per mod and file): a text, a number,
+ * true or false, sent as RQ MOD's playscene types them (a text that would read as a number, true or
+ * false goes in single quotes). */
+enum { VAL_NONE, VAL_TEXT, VAL_NUMBER, VAL_TRUE, VAL_FALSE };
 struct value_name {
 	char name[64];
 	char set_by[256];   /* the first choice or call whose "into" names it, or "" */
@@ -537,9 +544,15 @@ struct value_name {
 	bool checked;       /* a condition checks it ("var") */
 };
 int values_names(const cJSON *root, struct value_name *out, int max);   /* root NULL: the open file */
-const char *values_get(const char *name);  /* the open file's, or NULL */
+/* The value as the game shows it in a line (a number as its fill shows it), or NULL for none. */
+const char *values_get(const char *name);  /* the open file's */
 const char *values_get_for(const char *mod, const char *rel, const char *name);
-void values_set(const char *name, const char *text);   /* "" or NULL takes it away */
+int values_type(const char *name);         /* VAL_*: the open file's */
+void values_set(const char *name, const char *text);   /* a text; "" or NULL takes it away */
+/* A value of a type (VAL_NONE takes it away); a number from its text, false when it is not one. */
+bool values_set_typed(const char *name, int type, const char *text);
+/* What playscene gets for it: name=5, name='5', name=true (into out), false when there is none. */
+bool values_word(const char *name, char *out, size_t n, bool *quoted);
 unsigned values_gen(void);
 /* A text as the game shows it with the values for Play: {name} filled, {{ and }} as braces, a name
  * with no value as written (a static buffer, or s itself). */
@@ -590,6 +603,8 @@ void win_attach_console(void);
 bool win_relaunch(const char *game_dir);
 bool win_replace(const char *from, const char *to);   /* a file moved over another */
 bool win_stat(const char *path, long long *mtime, long long *size);   /* mtime in 100 ns steps */
+/* A folder as Windows writes it, for the window: back slashes, none at the end but a drive's. */
+const char *path_shown(const char *path, char *out, size_t n);
 const char *settings_get(const char *key);
 void settings_set(const char *key, const char *value);
 cJSON *settings_tree(void);                 /* the settings as a whole, or NULL */
