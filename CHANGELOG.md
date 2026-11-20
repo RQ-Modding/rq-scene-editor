@@ -18,6 +18,8 @@ below were built and tried on the way; none of them was released.
 
 - `--check --strict` also exits 1 when RQ MOD would not play a file (a problem, or a file it cannot
   read), for a mod's own checks before its release.
+- `--check --dir` on a mod's folder takes the files the window lists, so its `mod.json` is no longer
+  checked as a scene file.
 - `--help` names the bottom panel's Find, the keys and the values' types among the `--do` actions.
 - Built inside RQ MOD, the editor takes the engine's own scene checker and Rance Browser's readers,
   so the editor and the game check a file with the same file.

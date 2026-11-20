@@ -201,7 +201,9 @@ rq-scene-editor --mixer-check [--game DIR]
   file's path (`in_mod`), its `warnings` (the `{name}`s no step sets; the font's and the box's need
   the window), and how many files RQ MOD does not play (`with_problems`). With `--game` it checks
   the game's names of quests, characters and items, with `--dir` too; a picture is looked for in
-  the mod's folder, the nearest folder above the file with a `mod.json`.
+  the mod's folder, the nearest folder above the file with a `mod.json`. In a mod's folder,
+  `--dir` takes the files the window lists: every `.json` under `scenes`, and any other one only
+  when it has `"format"` and `"steps"` (not the `mod.json`).
 - `--format` writes the files in the editor's layout.
 - `--shot` draws the window without showing it and saves it. `--do` presses the window's buttons
   first: `select=PLACE`, `add=KIND`, `apply=JSON`, `copy`, `delete`, `up`, `down`, `undo`,

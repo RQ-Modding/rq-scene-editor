@@ -80,6 +80,18 @@ static void add_item(const char *mod, const char *rel, const char *path, const c
 	}
 }
 
+/* A JSON object with "format" and "steps", the window's rule for a file outside the scenes folder. */
+static bool is_scene_file(const char *path)
+{
+	cJSON *root = NULL;
+	char why[256];
+	bool yes = scene_read(path, &root, NULL, NULL, why, sizeof why) && cJSON_IsObject(root)
+	           && cJSON_GetObjectItemCaseSensitive(root, "format")
+	           && cJSON_GetObjectItemCaseSensitive(root, "steps");
+	cJSON_Delete(root);
+	return yes;
+}
+
 static void walk(const char *root, const char *rel, int depth)
 {
 	char dir[1600];
@@ -99,6 +111,11 @@ static void walk(const char *root, const char *rel, int depth)
 					walk(root, sub, depth + 1);
 			} else if (n > 5 && !strcasecmp(name + n - 5, ".json")) {
 				add_item(NULL, sub, full, NULL);
+				/* In a mod's folder, as the window lists them: every file under its scenes
+				 * folder, and any other one only when it is a scene file (not its mod.json). */
+				struct item *it = &items[nitems - 1];
+				if (it->mod_dir[0] && strncasecmp(it->in_mod, "scenes/", 7) && !is_scene_file(full))
+					nitems--;
 			}
 		}
 		free(name);
