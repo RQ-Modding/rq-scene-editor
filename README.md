@@ -7,7 +7,7 @@ A scene file is a mod's scene as JSON: the cast, then the steps the game plays (
 music, choices, branches). A mod plays one with `rq.scene.file`. The editor lists a mod's scene
 files, shows each file's steps as a list with its branches as a tree, and writes the file back.
 
-**State: 0.9.0, not released.** What it does so far:
+What it does:
 
 - it finds the game folder and lists the game's mods, or opens a mod's folder from anywhere;
 - it lists the mod's scene files, with a line count and why a file cannot be read;
@@ -48,10 +48,18 @@ files, shows each file's steps as a list with its branches as a tree, and writes
   the mod's functions, and lists what the game refuses;
 - it has two looks, Copandon (dark, the default) and Parchment (light).
 
-Still to come: it will ship in RQ MOD's package, as Rance Browser does.
-
 It is a fan project. AliceSoft and MangaGamer do not make or endorse it, and it contains nothing of
-their games.
+their games: it reads the copy on your own computer.
+
+## Getting it
+
+RQ MOD's package carries it since 2.62.1: `rq-scene-editor.exe` is in the game's `xsystem4` folder,
+beside `xsystem4.exe`. Each release here also has a zip with the program alone, for a game folder
+that has RQ MOD already.
+
+Play needs the game running RQ MOD 2.61.0 or newer, and a text value that looks like a number
+(`'5'`) needs 2.62.1. The docs site has a guide:
+[Writing scenes in the scene editor](https://rq-modding.github.io/rq-modding-docs/guide/scene-editor).
 
 ## Using it
 
@@ -122,9 +130,10 @@ name at the bottom to pick another.
   **Values for Play**, each `{name}` of the file with the value Play gives it (as the mod's
   `rq.scene.file` would with `vars`; the stage shows it too), its type (Text, Number, true, false,
   or none: Play sends nothing) and the choice or call that sets it in the scene. A text the game
-  would read as a number, true or false goes as a text (RQ MOD 2.62.1 or newer); **The mod's functions this file calls**, each with where it is called and, with the
-  game running, whether the mod names it; and the file's own fields (Plays once, the format, the
-  schema). The values are kept per mod and file.
+  would read as a number, true or false goes as a text (RQ MOD 2.62.1 or newer); **The mod's
+  functions this file calls**, each with where it is called and, with the game running, whether the
+  mod names it; and the file's own fields (Plays once, the format, the schema). The values are kept
+  per mod and file.
 - **Problems:** the panel at the bottom, folded to its tabs while the file has none. It runs RQ
   MOD's own checker on the file as it is typed, so its problems are the ones the game would give
   (the game does not play a file with one), with the game's names of quests, characters and items.
@@ -176,7 +185,7 @@ and file, and the values for Play.
 
 ```
 rq-scene-editor [--game DIR] [--mod ID | --mod-dir DIR] [--file REL] [--look copandon|parchment] [--scale F]
-rq-scene-editor --check [--dir DIR | --game DIR [--mod ID]] [--out FILE]
+rq-scene-editor --check [--dir DIR | --game DIR [--mod ID]] [--out FILE] [--strict]
 rq-scene-editor --format FILE...
 rq-scene-editor --shot FILE.png --game DIR [--mod ID | --mod-dir DIR] [--file REL] [--select PLACE]
                 [--look copandon|parchment] [--size WxH] [--scale F] [--do ACTION]...
@@ -186,7 +195,8 @@ rq-scene-editor --mixer-check [--game DIR]
 
 - `--check` reads every scene file of a folder (or of the game's mods) as RQ MOD reads it, writes
   it in the editor's layout, reads that back, and prints a JSON report. A file passes when it reads
-  back to the same values and a second write gives the same text. Exit 1 when one does not. The
+  back to the same values and a second write gives the same text. Exit 1 when one does not, and
+  with `--strict` also when RQ MOD would not play one (a problem, or a file it cannot read). The
   report also gives each file's `problems` from RQ MOD's checker, as the game writes them after the
   file's path (`in_mod`), its `warnings` (the `{name}`s no step sets; the font's and the box's need
   the window), and how many files RQ MOD does not play (`with_problems`). With `--game` it checks
@@ -231,8 +241,8 @@ rq-scene-editor --mixer-check [--game DIR]
   version is X)), `printgame` (what the editor knows of the game, its pill and why Play cannot
   play), `value=NAME=TEXT` (a text for Play, kept for the run only; `value=NAME:TYPE=VALUE` with
   TYPE `text`, `number`, `true`, `false` or `none`) and `printvalues` (each `{name}`, its type and
-  value, where the scene sets it, its uses, and what Play sends). A file with changes is not played from a shot,
-  as nothing is saved.
+  value, where the scene sets it, its uses, and what Play sends). A file with changes is not played
+  from a shot, as nothing is saved.
   `frame` draws a frame before the actions after it, so a run can go through a scene; the shot
   waits a few frames after the last actions.
 - `--mixer-check` mixes Play from here's sounds without a sound device and checks them: two sounds

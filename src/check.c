@@ -140,7 +140,7 @@ static int steps_alone(const cJSON *list, int *count)
 	return bad;
 }
 
-int run_check(const char *dir, const char *game_dir, const char *mod, const char *out_path)
+int run_check(const char *dir, const char *game_dir, const char *mod, const char *out_path, bool strict)
 {
 	if (dir) {
 		walk(dir, "", 0);
@@ -266,7 +266,8 @@ int run_check(const char *dir, const char *game_dir, const char *mod, const char
 	        G.nkinds > 0 ? "" : " (no game: the game's names not checked)");
 	fflush(stdout);
 	fflush(stderr);
-	return nfail ? 1 : 0;
+	/* --strict: a file RQ MOD would not play (a problem, or one it cannot read) fails too. */
+	return nfail || (strict && nprob) ? 1 : 0;
 }
 
 /* ---- --selftest ---- */

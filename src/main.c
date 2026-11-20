@@ -2,9 +2,9 @@
  *
  *   rq-scene-editor [--game DIR] [--mod ID] [--mod-dir DIR] [--file REL] [--scale F]
  *        the window, on a game folder's mods (--mod-dir: a mod's folder outside the game's mods)
- *   rq-scene-editor --check [--dir DIR | --game DIR [--mod ID]] [--out FILE]
+ *   rq-scene-editor --check [--dir DIR | --game DIR [--mod ID]] [--out FILE] [--strict]
  *        each scene file read as RQ MOD reads it, written in the editor's layout and read again;
- *        the results as JSON
+ *        the results as JSON (--strict: a file RQ MOD would not play fails too)
  *   rq-scene-editor --format FILE...
  *        the files written in the editor's layout (as the window's Save writes them)
  *   rq-scene-editor --shot FILE.png --game DIR [--mod ID | --mod-dir DIR] [--file REL]
@@ -29,7 +29,7 @@ SDL_Window *g_window;
 
 static struct {
 	const char *game, *mod, *mod_dir, *file, *select, *dir, *out, *selftest;
-	bool check, mixer_check;
+	bool check, strict, mixer_check;
 	const char *dos[64];   /* --do actions, in order */
 	int ndo;
 	int format_at;   /* argv index of the first file for --format, or 0 */
@@ -45,11 +45,12 @@ static void usage(void)
 	win_attach_console();
 	printf(APP_NAME " " EDITOR_VERSION ": RQ MOD's scene files for Rance Quest Magnum.\n\n"
 	       "  " APP_EXE " [--game DIR] [--mod ID] [--mod-dir DIR] [--file REL] [--scale F]\n"
-	       "  " APP_EXE " --check [--dir DIR | --game DIR [--mod ID]] [--out FILE]\n"
+	       "  " APP_EXE " --check [--dir DIR | --game DIR [--mod ID]] [--out FILE] [--strict]\n"
 	       "      each scene file read as RQ MOD reads it, written in the editor's layout and read\n"
-	       "      again: the same values, the same text twice. Exit 1 when one does not round-trip.\n"
-	       "      Each file's problems from RQ MOD's own checker (the game's names with --game) and\n"
-	       "      the editor's warnings that need no font.\n"
+	       "      again: the same values, the same text twice. Exit 1 when one does not round-trip,\n"
+	       "      and with --strict also when RQ MOD would not play one (a problem, or a file it\n"
+	       "      cannot read). Each file's problems from RQ MOD's own checker (the game's names with\n"
+	       "      --game) and the editor's warnings that need no font.\n"
 	       "  " APP_EXE " --format FILE...\n"
 	       "      the files written in the editor's layout\n"
 	       "  " APP_EXE " --shot FILE.png --game DIR [--mod ID | --mod-dir DIR] [--file REL]\n"
@@ -62,14 +63,17 @@ static void usage(void)
 	       "      plays, on stdout); the branches: cond=OP:PATH[:ARG] (the selected if's or row's\n"
 	       "      condition: add, group, del, not, kind, mode, value), does=on|steps|goto:LABEL|\n"
 	       "      end:VALUE (the selected row), label=NAME (its go-tos with it), printstep,\n"
-	       "      printfile; the bottom panel: panel=problems|log|logall, printproblems,\n"
+	       "      printfile; the bottom panel: panel=problems|log|logall|find, printproblems,\n"
 	       "      goproblem=N (the Nth problem clicked), logfile=PATH (another file as the game's log),\n"
-	       "      printlog, loglink=N (the log's Nth line clicked); the game (not asked in a shot\n"
-	       "      until one of these): game, pipe=NAME (another pipe), gameplay, gamefrom (Play from\n"
-	       "      the selected step), gamestop, gamewait=STATE[:SECS] (off, ready, functions,\n"
-	       "      notloaded, otherdir, old, idle, waiting, playing, place=PLACE, refused; 15 s),\n"
-	       "      printgame, value=NAME=TEXT (a value for Play), printvalues; frame: the actions\n"
-	       "      after it wait for a frame drawn\n"
+	       "      printlog, loglink=N (the log's Nth line clicked); Find: search=TEXT,\n"
+	       "      findcase=on|off, printfound, foundgo=N (the Nth hit clicked), printsel; the keys:\n"
+	       "      key=F5|F6|shift+F5|ctrl+F; the game (not asked in a shot until one of these): game,\n"
+	       "      pipe=NAME (another pipe), gameplay, gamefrom (Play from the selected step),\n"
+	       "      gamestop, gamewait=STATE[:SECS] (off, ready, functions, notloaded, otherdir, old,\n"
+	       "      idle, waiting, playing, place=PLACE, refused, version=X; 15 s), printgame,\n"
+	       "      value=NAME=TEXT or value=NAME:TYPE=VALUE (a value for Play; TYPE text, number,\n"
+	       "      true, false or none), printvalues; frame: the actions after it wait for a frame\n"
+	       "      drawn\n"
 	       "  " APP_EXE " --selftest FILE\n"
 	       "      edits, undo, saving and changes on disk, tried on FILE (a copy: it is written)\n"
 	       "  " APP_EXE " --mixer-check [--game DIR]\n"
@@ -162,6 +166,8 @@ static void parse_args(int argc, char **argv)
 			A.selftest = argv[++i];
 		} else if (!strcmp(a, "--check")) {
 			A.check = true;
+		} else if (!strcmp(a, "--strict")) {
+			A.strict = true;
 		} else if (!strcmp(a, "--mixer-check")) {
 			A.mixer_check = true;
 		} else if (!strcmp(a, "--dir") && i + 1 < argc) {
@@ -314,12 +320,12 @@ int main(int argc, char **argv)
 		if (have_game && !game_open(dir))
 			fprintf(stderr, APP_EXE ": the game's names are not checked: %s\n", G.errors);
 		if (A.dir)
-			return run_check(A.dir, NULL, NULL, A.out);
+			return run_check(A.dir, NULL, NULL, A.out, A.strict);
 		if (!have_game) {
 			fprintf(stderr, APP_EXE ": no game folder (use --game DIR or --dir DIR)\n");
 			return 1;
 		}
-		return run_check(NULL, dir, A.mod, A.out);
+		return run_check(NULL, dir, A.mod, A.out, A.strict);
 	}
 	if (A.mixer_check) {
 		if (!find_game(dir, sizeof dir) || !game_open(dir)) {

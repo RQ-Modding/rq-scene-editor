@@ -2,6 +2,26 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 1.0.0 (not released)
+
+The first release: in RQ MOD's package since 2.62.1 (`rq-scene-editor.exe` in the game's
+`xsystem4` folder, beside `xsystem4.exe`), and as a zip of its own.
+
+RQ Scene Editor writes RQ MOD's scene files for Rance Quest Magnum without Lua and without typing
+JSON. It lists a mod's scenes and shows each one's steps with their branches; each kind of step has
+fields of its own; the stage shows the selected step as the game draws it, from the game's own
+pictures and font, and plays its motion; faces, pictures, music and sounds are picked by their look
+and their name; conditions are built from lists; RQ MOD's own checker runs on the file as it is
+typed, beside the editor's warnings for what the game's message box cannot show; and **Play** plays
+the file in the running game, with the step the game plays lit in the list. Versions 0.1.0 to 0.9.0
+below were built and tried on the way; none of them was released.
+
+- `--check --strict` also exits 1 when RQ MOD would not play a file (a problem, or a file it cannot
+  read), for a mod's own checks before its release.
+- `--help` names the bottom panel's Find, the keys and the values' types among the `--do` actions.
+- Built inside RQ MOD, the editor takes the engine's own scene checker and Rance Browser's readers,
+  so the editor and the game check a file with the same file.
+
 ## 0.9.0 (not released)
 
 Find, keys for Play, values with a type, and the game started again.

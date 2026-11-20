@@ -612,7 +612,7 @@ void settings_save(void);
 
 /* ---- --check and --format (check.c) ---- */
 
-int run_check(const char *dir, const char *game_dir, const char *mod, const char *out_path);
+int run_check(const char *dir, const char *game_dir, const char *mod, const char *out_path, bool strict);
 int run_format(int argc, char **argv, int first);
 /* The open file's life on a copy that may be changed: edits, undo and redo, saving, a change on
  * disk with and without unsaved changes, the undo depth. */

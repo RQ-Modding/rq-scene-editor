@@ -1,0 +1,109 @@
+name: Build
+
+# Every push and pull request builds the Windows zip and keeps it as a workflow artifact.
+# A tag v<version> (matching the version in meson.build) also publishes it as a GitHub release.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# The Release step creates the GitHub release: the organization's default token only reads.
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    name: Windows
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          # flex and bison build libsys4's ini parser. base-devel brought them until its 2026.11 update.
+          install: >-
+            base-devel
+            flex
+            bison
+            git
+            zip
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-libsndfile
+            mingw-w64-x86_64-libjpeg-turbo
+            mingw-w64-x86_64-libwebp
+            mingw-w64-x86_64-libpng
+            mingw-w64-x86_64-libdeflate
+
+      # libjpeg-turbo 3.2.1 puts a copy of zlib inside its static library, so a static link beside
+      # zlib fails (z_errmsg defined twice). 3.2.0 links.
+      - name: Pin libjpeg-turbo 3.2.0
+        run: pacman -U --noconfirm https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libjpeg-turbo-3.2.0-1-any.pkg.tar.zst
+
+      - name: Version
+        id: version
+        run: |
+          v=$(sed -n "s/^ *version *: '\([^']*\)'.*/\1/p" meson.build | head -1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF#refs/tags/v}" != "$v" ]]; then
+            echo "Tag ${GITHUB_REF#refs/tags/} does not match the version $v in meson.build" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: |
+          meson setup build --buildtype=release
+          ninja -C build
+
+      # The program runs: --help prints its usage and ends with 0. It needs no DLL beside it.
+      - name: Run
+        run: |
+          ./build/rq-scene-editor.exe --help
+          if objdump -p build/rq-scene-editor.exe | grep -i "DLL Name" | grep -iv -E "kernel32|user32|gdi32|shell32|ole32|oleaut32|advapi32|opengl32|imm32|winmm|version|setupapi|cfgmgr32|msvcrt|ucrtbase|api-ms-win|comdlg32|shlwapi|uuid|rpcrt4"; then
+            echo "rq-scene-editor.exe needs a DLL that Windows does not have" >&2
+            exit 1
+          fi
+
+      - name: Package
+        run: |
+          pkg=RQSceneEditor
+          mkdir -p $pkg/licenses/imgui $pkg/licenses/cimgui $pkg/licenses/lua $pkg/licenses/rance-browser
+          cp build/rq-scene-editor.exe README.md CHANGELOG.md CREDITS.md COPYING $pkg/
+          cp -r /mingw64/share/licenses/. $pkg/licenses/
+          cp subprojects/rance-browser/third_party/cimgui/imgui/LICENSE.txt $pkg/licenses/imgui/
+          cp subprojects/rance-browser/third_party/cimgui/LICENSE $pkg/licenses/cimgui/
+          cp subprojects/rance-browser/CREDITS.md subprojects/rance-browser/COPYING $pkg/licenses/rance-browser/
+          # Lua's MIT notice is the comment at the end of lua.h.
+          sed -n '/^\* Copyright (C) 1994/,/^\*\*\*\*/p' third_party/lua/lua.h > $pkg/licenses/lua/LICENSE
+          cd $pkg && zip -r -9 ../RQSceneEditor-${{ steps.version.outputs.version }}-windows.zip . && cd ..
+          # The release's text: this version's section of CHANGELOG.md.
+          awk -v v="## ${{ steps.version.outputs.version }} " 'index($0, v) == 1 { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RQSceneEditor-${{ steps.version.outputs.version }}-windows
+          path: RQSceneEditor-${{ steps.version.outputs.version }}-windows.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: RQ Scene Editor ${{ steps.version.outputs.version }}
+          body_path: notes.md
+          files: RQSceneEditor-${{ steps.version.outputs.version }}-windows.zip
+          fail_on_unmatched_files: true
