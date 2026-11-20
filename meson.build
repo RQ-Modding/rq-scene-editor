@@ -40,11 +40,18 @@ scene_check_c = custom_target('scene_check_lua',
     depfile : 'scene_check_lua.c.d',
     command : [py, files('tools/embed.py'), scene_check, '@OUTPUT@', 'scene_check_lua', '@DEPFILE@'])
 
-executable('rq-scene-editor',
-    ['src/main.c', 'src/look.c', 'src/json.c', 'src/doc.c', 'src/mods.c', 'src/ui.c',
+editor_src = ['src/main.c', 'src/look.c', 'src/json.c', 'src/doc.c', 'src/mods.c', 'src/ui.c',
      'src/steps.c', 'src/win.c', 'src/check.c', 'src/media.c', 'src/stage.c', 'src/fields.c',
      'src/fx.c', 'src/play.c', 'src/worldmap.c', 'src/flash.c', 'src/mixer.c', 'src/picker.c',
-     'src/cond.c', 'src/problems.c', 'src/gamelog.c', 'src/pipe.c', 'src/game.c', scene_check_c],
+     'src/cond.c', 'src/problems.c', 'src/gamelog.c', 'src/pipe.c', 'src/game.c', scene_check_c]
+# The exe's icon (res/rq-scene-editor.ico, from res/rq-scene-editor.png).
+if host_machine.system() == 'windows'
+    editor_src += import('windows').compile_resources('res/rq-scene-editor.rc',
+        include_directories : include_directories('res'))
+endif
+
+executable('rq-scene-editor',
+    editor_src,
     c_args : c_warnings + [
               '-DEDITOR_VERSION="' + editor_version + '"',
               '-DEDITOR_BUILD_NOTE="' + build_note + '"'],

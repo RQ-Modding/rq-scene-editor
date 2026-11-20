@@ -20,6 +20,8 @@ below were built and tried on the way; none of them was released.
   read), for a mod's own checks before its release.
 - `--check --dir` on a mod's folder takes the files the window lists, so its `mod.json` is no longer
   checked as a scene file.
+- An icon of its own, on the exe in Explorer, on the window and in the taskbar
+  (`res/rq-scene-editor.png`, made into `res/rq-scene-editor.ico`).
 - ▶ and Play from here make the game's sounds as a line's letters come in: each face's pair from
   the game's own table (a picture of the mod's gets the game's default pair, as in the game), in
   turn and no closer than the table's wait, only inside quotes, none for narration, a page shown
