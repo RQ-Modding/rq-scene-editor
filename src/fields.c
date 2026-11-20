@@ -716,13 +716,208 @@ static int default_time(const char *kind)
 	return !strcmp(kind, "portrait") || !strcmp(kind, "mini") || !strcmp(kind, "flash") ? 200 : 500;
 }
 
+/* ---- effects, shakes and the world map: a number, and the list in words beside it ---- */
+
+/* A row of a list of numbers: a click puts its number in (PREVIEW_DEFAULT takes the key out), and
+ * while it is hovered the stage plays the step with it. */
+static void pick_row(cJSON *st, const char *k, int no, const char *label, bool selected)
+{
+	if (igSelectable_Bool(label, selected, 0, v2(0, 0)) && !selected) {
+		if (no == PREVIEW_DEFAULT)
+			drop(st, k);
+		else
+			put(st, k, cJSON_CreateNumber(no));
+		picked();
+	}
+	if (igIsItemHovered(0))
+		play_effect_preview(no);
+}
+
+/* set's effects (エフェクトセット表示): 1, 7001, and 7002 for any other number. */
+static const char *set_effect_words(bool has, int no)
+{
+	if (!has)
+		return "None: a crossfade of half a second";
+	if (no == 1)
+		return "Black, then waves for a second";
+	if (no == 7001)
+		return "Black, an R closing on green, then a crossfade";
+	if (no == 7002)
+		return "Black, a ghost's shape closing, then a crossfade";
+	return "As 7002: black, a ghost's shape closing, then a crossfade";
+}
+
+static void effect_words(bool has, int no, char *out, size_t n)
+{
+	if (!has) {
+		snprintf(out, n, "The default: a crossfade (1)");
+		return;
+	}
+	const char *name = effect_name(no);
+	if (!name)
+		snprintf(out, n, "Not an effect: the pictures show at once");
+	else if (no != 27 && !effect_written(no))
+		snprintf(out, n, "%s (the engine plays it as 51)", name);
+	else
+		snprintf(out, n, "%s", name);
+}
+
+static void effect_field(cJSON *st, const char *kind)
+{
+	bool set = !strcmp(kind, "set");
+	row_label("Effect", set ? "How the new pictures come in" : "The transition, from the engine's list");
+	number_field("##effect", st, "effect", set ? "none" : "1", true, S(64));
+	cJSON *v = item(st, "effect");
+	bool has = cJSON_IsNumber(v);
+	int no = has ? (int)v->valuedouble : 0;
+	char shown[200];
+	if (set)
+		snprintf(shown, sizeof shown, "%s", set_effect_words(has, no));
+	else
+		effect_words(has, no, shown, sizeof shown);
+	igSameLine(0, S(6));
+	igSetNextItemWidth(-1);
+	igBeginDisabled(ro);
+	if (igBeginCombo("##effect-list", shown, ImGuiComboFlags_HeightLarge)) {
+		char row[200];
+		if (set) {
+			static const int nos[] = { 1, 7001, 7002 };
+			pick_row(st, "effect", PREVIEW_DEFAULT, set_effect_words(false, 0), !v);
+			for (int i = 0; i < 3; i++) {
+				snprintf(row, sizeof row, "%-5d %s", nos[i], set_effect_words(true, nos[i]));
+				pick_row(st, "effect", nos[i], row, has && no == nos[i]);
+			}
+		} else {
+			pick_row(st, "effect", PREVIEW_DEFAULT, "The default: a crossfade (1)", !v);
+			for (int i = 1; i <= EFFECT_LAST; i++) {
+				if (!effect_name(i))
+					continue;
+				char words[160];
+				effect_words(true, i, words, sizeof words);
+				snprintf(row, sizeof row, "%-3d %s", i, words);
+				pick_row(st, "effect", i, row, has && no == i);
+			}
+		}
+		igEndCombo();
+	}
+	igEndDisabled();
+	if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+		igSetTooltip("A row hovered in the list plays on the stage");
+}
+
+/* A shake's mode in words (全画面揺れ, 顔揺れ and 立ち絵揺れ). */
+static void shake_words(int part, int mode, char *out, size_t n)
+{
+	float sx, sy, ms;
+	shake_mode(part, mode, &sx, &sy, &ms);
+	const char *way = sx > 0 && sy > 0 ? "Every way" : sy > 0 ? "Up and down" : "Side to side";
+	snprintf(out, n, "%s, %g pixels, %g s", way, sx > sy ? sx : sy, ms / 1000);
+}
+
+static void shake_field(cJSON *st, const char *kind)
+{
+	int part = !strcmp(kind, "shake") ? 0 : !strcmp(kind, "shake_face") ? 1 : 2;
+	row_label("Mode", "How the game shakes it");
+	number_field("##mode", st, "mode", "1", true, S(64));
+	cJSON *v = item(st, "mode");
+	bool has = cJSON_IsNumber(v);
+	int mode = has ? (int)v->valuedouble : 1;
+	char shown[160], words[120];
+	shake_words(part, mode, words, sizeof words);
+	snprintf(shown, sizeof shown, "%s%s", has ? "" : "The default: ", words);
+	igSameLine(0, S(6));
+	igSetNextItemWidth(-1);
+	igBeginDisabled(ro);
+	if (igBeginCombo("##mode-list", shown, 0)) {
+		char row[160];
+		shake_words(part, 1, words, sizeof words);
+		snprintf(row, sizeof row, "The default: %s", words);
+		pick_row(st, "mode", PREVIEW_DEFAULT, row, !v);
+		for (int m = 1; m <= 4; m++) {
+			shake_words(part, m, words, sizeof words);
+			snprintf(row, sizeof row, "%d  %s%s", m, words, m == 4 ? " (any other number)" : "");
+			pick_row(st, "mode", m, row, has && (m < 4 ? mode == m : mode < 1 || mode > 3));
+		}
+		igEndCombo();
+	}
+	igEndDisabled();
+	if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+		igSetTooltip("A row hovered in the list plays on the stage");
+}
+
+/* The world map: one of the game's 40 places, or a point of the mod's own with its name. */
+static void world_map_field(cJSON *st)
+{
+	cJSON *w = item(st, "world_map");
+	bool point = cJSON_IsObject(w);
+	row_label("Where", "A place of the game's world map, or a point of the mod's own");
+	igBeginDisabled(ro);
+	if (igRadioButton_Bool("A place of the game's", !point) && point) {
+		put(st, "world_map", cJSON_CreateNumber(1));
+		picked();
+	}
+	igSameLine(0, S(16));
+	if (igRadioButton_Bool("A point of its own", point) && !point) {
+		int x = 512, y = 384;
+		const char *name = NULL;
+		media_place(cJSON_IsNumber(w) ? (int)w->valuedouble : 1, &x, &y, &name);
+		cJSON *o = cJSON_CreateObject();
+		cJSON_AddNumberToObject(o, "x", x);
+		cJSON_AddNumberToObject(o, "y", y);
+		cJSON_AddStringToObject(o, "name", name ? name : "A place");
+		put(st, "world_map", o);
+		picked();
+	}
+	igEndDisabled();
+	w = item(st, "world_map");
+	if (cJSON_IsObject(w)) {
+		row_label("Point", "Where its tag points: x 0 to 1023, y 0 to 767; left of 512 the tag opens to the right");
+		number_field("##x", w, "x", "x", false, S(80));
+		igSameLine(0, S(8));
+		number_field("##y", w, "y", "y", false, S(80));
+		row_label("Name", "What its tag shows");
+		text_field("##name", w, "name", "the tag's text", false);
+		return;
+	}
+	int no = cJSON_IsNumber(w) ? (int)w->valuedouble : 0;
+	int x = 0, y = 0;
+	const char *name = NULL;
+	bool known = media_place(no, &x, &y, &name);
+	row_label("Place", "One of the game's places, 1 to 40");
+	number_field("##place", st, "world_map", "1 to 40", false, S(64));
+	char shown[200];
+	if (known)
+		snprintf(shown, sizeof shown, "%s (%d, %d)", name, x, y);
+	else
+		snprintf(shown, sizeof shown, "%s", cJSON_IsNumber(w) ? "Not a place of the game's" : "Pick a place");
+	igSameLine(0, S(6));
+	igSetNextItemWidth(-1);
+	igBeginDisabled(ro);
+	if (igBeginCombo("##place-list", shown, ImGuiComboFlags_HeightLarge)) {
+		for (int i = 1; i <= PLACES_MAX; i++) {
+			int px, py;
+			const char *pn = NULL;
+			if (!media_place(i, &px, &py, &pn))
+				continue;
+			char row[200];
+			snprintf(row, sizeof row, "%-3d %s (%d, %d)", i, pn, px, py);
+			if (igSelectable_Bool(row, i == no, 0, v2(0, 0)) && i != no) {
+				put(st, "world_map", cJSON_CreateNumber(i));
+				picked();
+			}
+		}
+		igEndCombo();
+	}
+	igEndDisabled();
+	if (cJSON_IsNumber(w) && !known)
+		bad_line(no >= 1 && no <= PLACES_MAX ? "The game's list has no data for this place here" : "A place is 1 to 40");
+}
+
 static void effect_time(cJSON *st, const char *kind, bool effect, bool time)
 {
 	char hint[64];
-	if (effect) {
-		row_label("Effect", "The game's transition number");
-		number_field("##effect", st, "effect", "1: the game's default", true, S(150));
-	}
+	if (effect)
+		effect_field(st, kind);
 	if (time) {
 		row_label("Time", "How long the transition takes, in milliseconds");
 		snprintf(hint, sizeof hint, "%d ms: the default", default_time(kind));
@@ -821,8 +1016,10 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 	} else if (!strcmp(kind, "flash")) {
 		effect_time(st, kind, false, true);
 	} else if (!strcmp(kind, "shake") || !strcmp(kind, "shake_face") || !strcmp(kind, "shake_portrait")) {
-		row_label("Mode", "The game's shake mode");
-		number_field("##mode", st, "mode", "1: the default", true, S(150));
+		shake_field(st, kind);
+	} else if (!strcmp(kind, "world_map")) {
+		world_map_field(st);
+		hint_line("The game's world map with the place's tag (jingle 407); a click goes on.");
 	} else if (!strcmp(kind, "music")) {
 		sound_field(st, kind, SOUND_MUSIC);
 		row_label("Fade", "The fade type; -1 the game's");

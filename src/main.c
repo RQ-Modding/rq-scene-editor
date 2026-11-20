@@ -29,7 +29,7 @@ SDL_Window *g_window;
 
 static struct {
 	const char *game, *mod, *mod_dir, *file, *select, *dir, *out, *selftest;
-	bool check;
+	bool check, mixer_check;
 	const char *dos[64];   /* --do actions, in order */
 	int ndo;
 	int format_at;   /* argv index of the first file for --format, or 0 */
@@ -54,9 +54,15 @@ static void usage(void)
 	       "      [--select PLACE] [--look copandon|parchment] [--size WxH] [--scale F] [--do ACTION]...\n"
 	       "      --do: what a button does, before the shot: select=PLACE, add=KIND, apply=JSON,\n"
 	       "      type=JSON, copy, delete, up, down, undo, redo, tab=steps|cast,\n"
-	       "      modal=unsaved|layout|changed|new, fold (nothing is saved)\n"
+	       "      modal=unsaved|layout|changed|new, fold (nothing is saved); the stage: play (the\n"
+	       "      step's motion), playon (Play from here), clock=MS (its clock held), click,\n"
+	       "      pick=ROW, answer=then|else, preview=EFFECT (a list's row hovered), print (what\n"
+	       "      plays, on stdout); frame: the actions after it wait for a frame drawn\n"
 	       "  " APP_EXE " --selftest FILE\n"
 	       "      edits, undo, saving and changes on disk, tried on FILE (a copy: it is written)\n"
+	       "  " APP_EXE " --mixer-check [--game DIR]\n"
+	       "      Play from here's sounds mixed without a sound device: two at once, a track's fade\n"
+	       "      and its loop\n"
 	       "  --mod-dir DIR: a mod's folder outside the game's mods folder\n"
 	       "  --select PLACE: a step's place, such as steps[4].then[0]\n"
 	       "  --scale F: the size of the text and the layout, 1 to 4 (default: the display's;\n"
@@ -65,7 +71,7 @@ static void usage(void)
 
 static void on_error(const char *msg)
 {
-	if (A.check || A.shot_path || A.format_at || A.selftest) {
+	if (A.check || A.shot_path || A.format_at || A.selftest || A.mixer_check) {
 		fprintf(stderr, "%s\n", msg);
 		return;
 	}
@@ -144,6 +150,8 @@ static void parse_args(int argc, char **argv)
 			A.selftest = argv[++i];
 		} else if (!strcmp(a, "--check")) {
 			A.check = true;
+		} else if (!strcmp(a, "--mixer-check")) {
+			A.mixer_check = true;
 		} else if (!strcmp(a, "--dir") && i + 1 < argc) {
 			A.dir = argv[++i];
 		} else if (!strcmp(a, "--out") && i + 1 < argc) {
@@ -246,13 +254,28 @@ static void core_message(const char *text)
 	ui_status("%s", text);
 }
 
+/* The --do actions from `from` up to a "frame" (the rest wait for a frame drawn); where the next
+ * ones start. */
+static int run_dos(int from, int *failed)
+{
+	for (int i = from; i < A.ndo; i++) {
+		if (!strcmp(A.dos[i], "frame"))
+			return i + 1;
+		if (!ui_do(A.dos[i])) {
+			fprintf(stderr, APP_EXE ": --do %s did nothing\n", A.dos[i]);
+			(*failed)++;
+		}
+	}
+	return A.ndo;
+}
+
 int main(int argc, char **argv)
 {
 	parse_args(argc, argv);
-	if (A.check || A.format_at || A.selftest)
+	if (A.check || A.format_at || A.selftest || A.mixer_check)
 		win_attach_console();
 	/* Nobody watches these runs: a failed check goes to the console, not to a dialog. */
-	if (A.check || A.format_at || A.shot_path || A.selftest) {
+	if (A.check || A.format_at || A.shot_path || A.selftest || A.mixer_check) {
 		_set_error_mode(_OUT_TO_STDERR);
 		signal(SIGABRT, on_abort);
 	}
@@ -276,6 +299,13 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		return run_check(NULL, dir, A.mod, A.out);
+	}
+	if (A.mixer_check) {
+		if (!find_game(dir, sizeof dir) || !game_open(dir)) {
+			fprintf(stderr, APP_EXE ": no game folder (use --game DIR) %s\n", G.errors);
+			return 1;
+		}
+		return mixer_check();
 	}
 	if (!find_game(dir, sizeof dir)) {
 		if (A.shot_path)
@@ -360,12 +390,7 @@ int main(int argc, char **argv)
 	UI.shot = A.shot_path != NULL;
 	ui_init(dir, A.mod_dir, A.mod, A.file, A.select);
 	int failed_dos = 0;
-	for (int i = 0; i < A.ndo; i++) {
-		if (!ui_do(A.dos[i])) {
-			fprintf(stderr, APP_EXE ": --do %s did nothing\n", A.dos[i]);
-			failed_dos++;
-		}
-	}
+	int next_do = run_dos(0, &failed_dos);
 
 	GLuint fbo = 0;
 	if (A.shot_path) {
@@ -400,6 +425,8 @@ int main(int argc, char **argv)
 		media_frame();
 		ui_frame();
 		igRender();
+		/* The stage's textures, when it plays, before the window that shows them. */
+		fx_render();
 		if (UI.quit)
 			run = false;
 		ui_title(want_title, sizeof want_title);
@@ -416,7 +443,9 @@ int main(int argc, char **argv)
 		ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
 		if (fbo) {
 			/* The shot waits for the pictures it shows (a few seconds at most). */
-			if (UI.frame > 12 && (media_idle() || UI.frame > 900)) {
+			if (UI.frame > 12 && (media_idle() || UI.frame > 900) && next_do < A.ndo) {
+				next_do = run_dos(next_do, &failed_dos);   /* a frame drawn: the next actions */
+			} else if (UI.frame > 12 && (media_idle() || UI.frame > 900)) {
 				code = shot_save(A.w, A.h, A.shot_path) ? 0 : 1;
 				if (code)
 					fprintf(stderr, APP_EXE ": could not write %s\n", A.shot_path);
@@ -432,6 +461,8 @@ int main(int argc, char **argv)
 				SDL_Delay(50);
 		}
 	}
+	fx_shutdown();
+	mixer_shutdown();
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplSDL2_Shutdown();
 	igDestroyContext(NULL);

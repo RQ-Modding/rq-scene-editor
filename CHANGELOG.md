@@ -2,6 +2,39 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 0.4.0 (not released)
+
+The stage moves: a step's motion, and the scene played on from a step, without the game.
+
+- **▶ plays a step.** On the stage, ▶ plays the selected step's motion from the stage before it:
+  - the game's transitions, as RQ MOD's engine draws them (its shaders, and the effects it draws in
+    C written again as shaders); an effect it does not draw plays as its crossfade through a blur,
+    27 shakes the screen, and 0 or no time shows the new screen at once;
+  - a background sliding out and in (`background_in`, `background_out`) with the game's jingle;
+  - a picture set's effects: the crossfade, 1 (the screen cleared, then waves for a second), 7001
+    and 7002 (the game's shape shrinking over the screen, then a crossfade), with the jingle;
+  - shakes of the screen, the face and the portrait in the game's modes, the flash, black and
+    white;
+  - the letters coming in one after another at the text speed (`speed`, or the player's), each
+    fading in, and the click mark turning;
+  - the world map: the game's map, its jingle, the place's tag (the game's Flash file, playing) and
+    the place's name.
+- **Play from here.** The scene plays on from the selected step: a click or Space shows the rest of
+  a page, then the next; a choice waits for a click on its menu and goes on with that row; an `if`
+  asks which way it goes; `goto` and labels are followed and `end` ends it; the music changes as
+  the game's music command changes it (at once, or the old track falling while the new one rises),
+  starting with the track the steps before put on; sounds and jingles play several at once. A
+  mod's function and the event flags are passed by and named under the stage. The step playing is
+  marked in the list. Escape or Stop ends it.
+- **Effects, shakes and places by name.** Beside an effect's number, the engine's list of effects
+  in words (a picture set's own three); beside a shake's mode, what it does ("Up and down, 20
+  pixels, 0.1 s"); the world map's step picks one of the game's 40 places by name, or a point of
+  the mod's own with its name. A row hovered in an effect's or a shake's list plays the step with
+  it on the stage, over and over.
+- **For checks and agents,** `--do` drives the stage (`play`, `playon`, `clock=MS`, `click`,
+  `pick=ROW`, `answer=then|else`, `preview=EFFECT`, `print`), and `frame` lets a run go through a
+  scene between frames; `--mixer-check` checks the sounds' mixing without a sound device.
+
 ## 0.3.0 (not released)
 
 The stage as the game draws it, from the game's own pictures.
@@ -21,7 +54,7 @@ The stage as the game draws it, from the game's own pictures.
     box.
 
   Measured against shots of the game, the text falls within a pixel or two of where the game puts
-  it. Motion (effects, slides, shakes) does not show yet: Play shows it in the game.
+  it. Motion (effects, slides, shakes) does not show yet.
 - **Name plates from the game.** A face's plate shows the name the game gives that face, read from
   the game's own code, so a face the game shows without a plate has none here either. Without the
   game's code, the first word of the character's name stands in.

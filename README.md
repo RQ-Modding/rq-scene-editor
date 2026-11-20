@@ -7,7 +7,7 @@ A scene file is a mod's scene as JSON: the cast, then the steps the game plays (
 music, choices, branches). A mod plays one with `rq.scene.file`. The editor lists a mod's scene
 files, shows each file's steps as a list with its branches as a tree, and writes the file back.
 
-**State: 0.3.0, not released.** What it does so far:
+**State: 0.4.0, not released.** What it does so far:
 
 - it finds the game folder and lists the game's mods, or opens a mod's folder from anywhere;
 - it lists the mod's scene files, with a line count and why a file cannot be read;
@@ -18,17 +18,22 @@ files, shows each file's steps as a list with its branches as a tree, and writes
 - it edits each kind of step in fields of its own, with its JSON folded under them;
 - it draws the stage at the selected step as the game draws its screen, from the game's own
   pictures: the layers each step before it has set, the game's message box with the face, the name
-  plate and the page in the game's font, its buttons, and a choice's menu; motion (effects, slides,
-  shakes) does not show yet;
+  plate and the page in the game's font, its buttons, and a choice's menu;
+- it plays a step's motion on the stage (▶): the game's transitions, a background sliding in or
+  out, a picture set's effects, shakes, the flash, the letters coming in at the text speed, the
+  world map with its place's tag; and **Play from here** plays the scene on from the selected step,
+  with its pages, choices, branches, labels, music and sounds, without the game;
+- it picks an effect, a shake and a place of the world map by name, and a row hovered in the list
+  plays on the stage;
 - it edits the cast: faces, name plates, renaming an entry with the lines that use it;
 - it has undo and redo, and it notices when a file changes on disk;
 - it reads each file as RQ MOD reads it, so a file the game refuses shows the game's own message;
 - it has two looks, Copandon (dark, the default) and Parchment (light).
 
 Still to come: picking faces, pictures, music and sounds from the game in a window instead of by
-number; the conditions, and a choice row's condition, colour and sound, in fields; RQ MOD's own checks on the file; and Play,
-which starts the scene in the running game. It will ship in RQ MOD's package, as Rance Browser
-does.
+number; the conditions, and a choice row's condition, colour and sound, in fields; RQ MOD's own
+checks on the file; and Play in the game, which starts the scene in the running game. It will ship
+in RQ MOD's package, as Rance Browser does.
 
 It is a fan project. AliceSoft and MangaGamer do not make or endorse it, and it contains nothing of
 their games.
@@ -51,6 +56,16 @@ name at the bottom to pick another.
   field's whole change. An optional field left empty is taken out of the file, so the game's
   default applies (the empty field shows it). **JSON**, under the fields, shows the step as the
   file holds it and takes any change by hand.
+- **Stage:** **▶** plays the selected step's motion from the stage before it. **Play from here**
+  plays on from the selected step: a click on the stage or Space (or Enter) shows the rest of a
+  page, then the next one; a choice waits for a click on one of its rows; an `if` asks which way
+  it goes; `goto` and labels are followed; the music changes as the game changes it, and the
+  sounds and jingles play. A mod's function (`call`, `cmd`) and the event flags are passed by and
+  named under the stage. Escape or **Stop** ends it. The step playing is marked in the list.
+- **Effects and shakes:** beside an effect's number, the engine's effects by name; beside a
+  shake's mode, what it does. A row hovered in the list plays the step with it on the stage, over
+  and over. An effect the engine does not draw plays as the engine plays it (a crossfade through a
+  blur). The world map's step picks one of the game's places by name, or a point of the mod's own.
 - **Cast and file:** the cast, each entry with its face, its name plate and the lines that use it,
   and the file's own fields (Plays once, the format, the schema).
 - **Keys:** Ctrl+S saves, Ctrl+Z undoes, Ctrl+Y (or Ctrl+Shift+Z) redoes, Up and Down move through the
@@ -87,6 +102,7 @@ rq-scene-editor --format FILE...
 rq-scene-editor --shot FILE.png --game DIR [--mod ID | --mod-dir DIR] [--file REL] [--select PLACE]
                 [--look copandon|parchment] [--size WxH] [--scale F] [--do ACTION]...
 rq-scene-editor --selftest FILE
+rq-scene-editor --mixer-check [--game DIR]
 ```
 
 - `--check` reads every scene file of a folder (or of the game's mods) as RQ MOD reads it, writes
@@ -99,13 +115,19 @@ rq-scene-editor --selftest FILE
   on the stage), `json` (the JSON unfolded), `cast=NAME`, `castadd` and `move=FROM|LIST|INDEX`
   (the step at FROM put at INDEX of the list LIST, such as `steps` or `steps[2].then`). `stage`
   draws the stage alone over the whole window: with `--size 1024x768 --scale 1` it is the game's
-  screen pixel for pixel. Nothing is saved.
+  screen pixel for pixel. Nothing is saved. On the stage: `play` (▶ on the selected step),
+  `playon` (Play from here), `clock=MS` (the player's clock held at MS), `click`, `pick=ROW`
+  (a row of the menu on show), `answer=then|else` (the `if` asked), `preview=EFFECT` (a row of an
+  effect's or a shake's list hovered) and `print` (the step playing and the line under the stage,
+  on stdout). `frame` draws a frame before the actions after it, so a run can go through a scene.
+- `--mixer-check` mixes Play from here's sounds without a sound device and checks them: two sounds
+  at once, a track's fade halfway, its loop, a sound's end.
 - `--selftest` tries editing, undo, saving and changes on disk on FILE. FILE must be a copy: it is
   written.
 - A step's place is written as `steps[4]`, `steps[2].then[0]` or `steps[3].choice[1].steps[0]`.
 
-The runs that need no one (`--check`, `--format`, `--shot`, `--selftest`) print a failure to the
-console and exit with code 3 instead of opening a dialog.
+The runs that need no one (`--check`, `--format`, `--shot`, `--selftest`, `--mixer-check`) print a
+failure to the console and exit with code 3 instead of opening a dialog. `--shot` plays no sound.
 
 ## Building
 

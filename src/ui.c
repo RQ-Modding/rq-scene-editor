@@ -617,6 +617,14 @@ static void keys(void)
 	}
 	if (io->WantTextInput)
 		return;
+	if (play_active()) {
+		/* The stage playing: Space or Enter for the next page, Escape to stop. */
+		if (igIsKeyPressed_Bool(ImGuiKey_Escape, false))
+			play_stop();
+		if (igIsKeyPressed_Bool(ImGuiKey_Space, false) || igIsKeyPressed_Bool(ImGuiKey_Enter, false)
+		    || igIsKeyPressed_Bool(ImGuiKey_KeypadEnter, false))
+			play_key();
+	}
 	if (igIsKeyChordPressed_Nil(ImGuiMod_Ctrl | ImGuiKey_Z))
 		op_undo();
 	if (igIsKeyChordPressed_Nil(ImGuiMod_Ctrl | ImGuiKey_Y) || igIsKeyChordPressed_Nil(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z))
@@ -1129,6 +1137,17 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 	if (sel) {
 		ImDrawList_AddRect(dl, p, b, col_a(C_ACCENT, 0.6f), S(3), S(1), 0);
 		ImDrawList_AddRectFilled(dl, p, v2(p.x + S(3), b.y), col(C_SEL_BAR), 0, 0);
+	}
+	/* The step Play from here is on: a mark, and the list brought to it when it moves on. */
+	if (play_on() && !strcmp(play_step_place(), place)) {
+		static char shown_playing[256];
+		ImDrawList_AddRectFilled(dl, p, b, col_a(C_ACCENT, 0.10f), S(3), 0);
+		ImDrawList_AddText_FontPtr(dl, F_UI, fs(12), v2(p.x + S(7), p.y + (h - fs(12)) / 2), col(C_ACCENT), "\xE2\x96\xB6", NULL, 0, NULL);
+		if (strcmp(shown_playing, place)) {
+			snprintf(shown_playing, sizeof shown_playing, "%s", place);
+			if (!igIsRectVisible_Vec2(p, b))
+				igSetScrollHereY(0.4f);
+		}
 	}
 	char num[16];
 	snprintf(num, sizeof num, "%d", index);
@@ -1739,14 +1758,51 @@ static void stage_foot(const struct stage *sg, bool own_line, int *page)
 	}
 }
 
-/* The stage's heading: the game's screen at the step, standing still. */
-static void stage_label(void)
+/* The stage's heading: the game's screen at the step, and its buttons to play it. */
+static void stage_label(bool steps)
 {
+	igAlignTextToFramePadding();
 	igTextUnformatted("Stage", NULL);
 	igSameLine(0, S(8));
-	igTextColored(colv(C_FAINT), "\xC2\xB7 the game's screen, without motion");
-	igSetItemTooltip("Drawn from the game's own pictures and font at the selected step.\n"
-	                 "Effects, slides and shakes do not show here yet: Play shows them in the game.");
+	igTextColored(colv(C_FAINT), "\xC2\xB7 the game's screen");
+	igSetItemTooltip("Drawn from the game's own pictures and font at the selected step, where the step ends.\n"
+	                 "\xE2\x96\xB6 plays the step's motion; Play from here goes on through the steps after it.");
+	if (!steps)
+		return;
+	const char *a = "\xE2\x96\xB6", *b = "Play from here", *stop = "\xE2\x96\xA0  Stop";
+	float gap = S(6), pad = igGetStyle()->FramePadding.x * 2;
+	float wa = igCalcTextSize(a, NULL, false, 0).x + pad, wb = igCalcTextSize(b, NULL, false, 0).x + pad;
+	float ws = igCalcTextSize(stop, NULL, false, 0).x + pad;
+	bool can = D.root && UI.sel[0] && sel_step(NULL, NULL);
+	if (play_active() && !play_preview()) {
+		igSameLine(content_right() - ws, 0);
+		if (igButton(stop, v2(0, 0)))
+			play_stop();
+		igSetItemTooltip("Stops the play (Escape)");
+		return;
+	}
+	igSameLine(content_right() - wa - gap - wb, 0);
+	igBeginDisabled(!can);
+	if (igButton(a, v2(0, 0)))
+		play_start(UI.sel, false);
+	igSetItemTooltip("Plays the selected step from the stage before it: its transition, slide, shake or pages");
+	igSameLine(0, gap);
+	if (igButton(b, v2(0, 0)))
+		play_start(UI.sel, true);
+	igSetItemTooltip("Plays on from the selected step as the game would: a click or Space for each page,\n"
+	                 "the menu's rows clicked, an if asked. Without the game: mods' functions and the game's\n"
+	                 "commands are passed by.");
+	igEndDisabled();
+}
+
+/* The stage's foot while it plays: what the player waits for. */
+static void play_foot(void)
+{
+	igAlignTextToFramePadding();
+	igPushFont(NULL, 14);
+	char cut[700];
+	igTextColored(colv(C_DIM), "%s", fit(F_UI, fs(14), play_status(), igGetContentRegionAvail().x - S(8), cut, sizeof cut));
+	igPopFont();
 }
 
 /* The stage at the top of the right side, for the selected step. */
@@ -1772,6 +1828,13 @@ static void stage_for_step(const cJSON *st)
 		*page = pages > 0 ? pages - 1 : 0;
 	if (*page < 0)
 		*page = 0;
+	/* ▶ stops when another step is selected; Play from here goes on. */
+	if (play_active() && !play_on() && strcmp(play_place(), UI.sel))
+		play_stop();
+	if (play_draw(igGetContentRegionAvail().x)) {
+		play_foot();
+		return;
+	}
 	stage_draw(&sg, *page, igGetContentRegionAvail().x);
 	stage_foot(&sg, own, page);
 }
@@ -1789,7 +1852,8 @@ static void stage_alone(float w)
 	int page = sg.line == st ? fields_page : pages - 1;
 	if (page >= pages)
 		page = pages - 1;
-	stage_draw(&sg, page < 0 ? 0 : page, w);
+	if (!play_draw(w))
+		stage_draw(&sg, page < 0 ? 0 : page, w);
 }
 
 static bool json_open;   /* the step's JSON shown under its fields */
@@ -1842,7 +1906,7 @@ static void right_side(void)
 		cast_side();
 		return;
 	}
-	stage_label();
+	stage_label(true);
 	cJSON *st = sel_step(NULL, NULL);
 	bool typing = strcmp(edit_buf, edit_src) != 0;
 	if (strcmp(edit_for, UI.sel) || edit_gen != doc_gen || (!typing && (edit_at != D.at || D.live)))
@@ -1890,7 +1954,7 @@ static void cast_side(void)
 {
 	cJSON *cast = cJSON_GetObjectItemCaseSensitive(D.root, "cast");
 	cJSON *e = cJSON_GetObjectItemCaseSensitive(cast, cast_sel);
-	stage_label();
+	stage_label(false);
 	char first[256];
 	int uses = e ? cast_uses(cast_sel, first, sizeof first) : 0;
 	struct stage sg;
@@ -2234,6 +2298,8 @@ static void modals(void)
 
 /* ---- an action by name (--shot --do), as the window's own buttons do it ---- */
 
+static int held_preview;   /* preview=N: a list's row held as hovered */
+
 bool ui_do(const char *action)
 {
 	const char *eq = strchr(action, '=');
@@ -2293,6 +2359,22 @@ bool ui_do(const char *action)
 		cast_add();
 	else if (!strcmp(name, "stage"))
 		stage_only = true;
+	else if (!strcmp(name, "play") || !strcmp(name, "playon")) {   /* the stage playing from the selected step */
+		play_start(UI.sel, name[4] == 'o');
+		return play_active();
+	} else if (!strcmp(name, "clock"))   /* clock=MS: the player's clock held there, for a shot */
+		play_fixed_clock(atof(arg));
+	else if (!strcmp(name, "click"))
+		play_key();
+	else if (!strcmp(name, "pick"))   /* pick=N: the menu's row N clicked */
+		play_pick(atoi(arg));
+	else if (!strcmp(name, "answer"))   /* answer=then|else: the if asked */
+		play_answer(!strcmp(arg, "then"));
+	else if (!strcmp(name, "print")) {   /* what plays, on stdout */
+		printf("play %s %s | %s\n", play_active() ? "on" : "off", play_step_place(), play_status());
+		fflush(stdout);
+	} else if (!strcmp(name, "preview"))   /* preview=N: as if the list's row N were hovered (-2 the default) */
+		held_preview = atoi(arg);
 	else if (!strcmp(name, "move")) {   /* move=FROM|LIST|INDEX, as a drop does it */
 		char from[256], list[256];
 		int index = 0;
@@ -2311,6 +2393,8 @@ void ui_frame(void)
 	ImGuiIO *io = igGetIO_Nil();
 	double now = igGetTime();
 	fields_frame();
+	if (held_preview)
+		play_effect_preview(held_preview);
 	if (!UI.shot && now >= next_scan)
 		rescan();
 	if (!UI.shot && now >= next_watch) {

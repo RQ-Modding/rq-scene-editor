@@ -33,6 +33,7 @@ const struct kind_info kinds[] = {
 	{ "shake", "SHAKE", TAG_PIC, "Shake the screen", "{ \"shake\": true }" },
 	{ "shake_face", "SHAKE", TAG_PIC, "Shake the face", "{ \"shake_face\": true }" },
 	{ "shake_portrait", "SHAKE", TAG_PIC, "Shake the standing picture", "{ \"shake_portrait\": true }" },
+	{ "world_map", "WORLD MAP", TAG_PIC, "The world map", "{ \"world_map\": 1 }" },
 	{ "music", "MUSIC", TAG_SND, "Music", "{ \"music\": 93 }" },
 	{ "sound", "SOUND", TAG_SND, "A sound", "{ \"sound\": 5012 }" },
 	{ "jingle", "JINGLE", TAG_SND, "A jingle", "{ \"jingle\": 1008 }" },
@@ -256,6 +257,20 @@ char *step_summary(const cJSON *st, const cJSON *cast)
 		}
 	} else if (!strcmp(kind, "note")) {
 		add_value(&o, v);
+	} else if (!strcmp(kind, "world_map")) {
+		int x, y;
+		const char *name;
+		const cJSON *n = cJSON_GetObjectItemCaseSensitive(v, "name");
+		if (cJSON_IsNumber(v) && media_place((int)v->valuedouble, &x, &y, &name))
+			add(&o, "The world map at %s (%d)", name, (int)v->valuedouble);
+		else if (cJSON_IsObject(v) && cJSON_IsString(n)) {
+			const cJSON *jx = cJSON_GetObjectItemCaseSensitive(v, "x"), *jy = cJSON_GetObjectItemCaseSensitive(v, "y");
+			add(&o, "The world map at %s, %d, %d", n->valuestring, cJSON_IsNumber(jx) ? (int)jx->valuedouble : 0,
+			    cJSON_IsNumber(jy) ? (int)jy->valuedouble : 0);
+		} else {
+			add(&o, "The world map at ");
+			add_value(&o, v);
+		}
 	} else {
 		add(&o, "%s", kind_find(kind)->title);
 		const cJSON *mode = cJSON_GetObjectItemCaseSensitive(st, "mode");

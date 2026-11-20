@@ -9,8 +9,9 @@
  * AUTO, SKIP and CONFIG (`メッセージ枠.jaf`, `メッセージボタン.jaf`); a choice as the game's menu
  * (`T_Select`). A page is laid out in the game's font as the game lays it out: words that do not
  * fit go to the next line, an opening quote hangs left of where the lines start, and a line past
- * the box's last is drawn in red. What moves (effects, slides, shakes) is not shown yet:
- * the stage shows where each step ends. */
+ * the box's last is drawn in red. Still, the stage shows where each step ends; while it plays
+ * (play.c), the same drawing takes what moves: a slide, a shake, the letters coming in, the click
+ * mark's turn, a white flash. */
 #include <float.h>
 #include <math.h>
 #include <stdio.h>
@@ -43,15 +44,17 @@ static const cJSON *get(const cJSON *o, const char *k)
 	return cJSON_IsObject(o) ? cJSON_GetObjectItemCaseSensitive(o, k) : NULL;
 }
 
+/* The game's 画面_クリア: every picture, the screen's colour and the face (顔クリア). */
 static void clear_layers(struct stage *s)
 {
 	for (int i = 0; i < L_COUNT; i++)
 		s->layer[i] = NULL;
 	s->mask_cg = 0;
 	s->screen = 0;
+	s->face_off = true;
 }
 
-static void apply(struct stage *s, const cJSON *st)
+void stage_apply(struct stage *s, const cJSON *st)
 {
 	const char *kind = step_kind(st);
 	if (!kind)
@@ -77,7 +80,7 @@ static void apply(struct stage *s, const cJSON *st)
 		s->layer[L_CG] = v;
 	} else if (!strcmp(kind, "set")) {
 		/* セット表示: the four layers (none where 0 or left out), no scene CG unless the set
-		 * names one, and the game's mask wallpaper 5550. */
+		 * names one, and the game's mask wallpaper 5550; the message box and the face cleared. */
 		static const char *const keys[] = { "wallpaper", "background", "portrait", "mini", "cg" };
 		static const int layers[] = { L_WALL, L_BG, L_PORTRAIT, L_MINI, L_CG };
 		for (int i = 0; i < 5; i++)
@@ -86,6 +89,8 @@ static void apply(struct stage *s, const cJSON *st)
 		s->mask_cg = 5550;
 		if (s->layer[L_WALL])
 			s->screen = 0;
+		s->line = NULL;
+		s->face_off = true;
 	} else if (!strcmp(kind, "black") || !strcmp(kind, "white")) {
 		/* 黒画面, 白画面: the screen cleared to one colour. */
 		clear_layers(s);
@@ -95,9 +100,25 @@ static void apply(struct stage *s, const cJSON *st)
 		s->line = NULL;
 	} else if (!strcmp(kind, "say") || !strcmp(kind, "think") || !strcmp(kind, "narrate")) {
 		s->line = st;
+		s->face_off = false;
 	} else if (!strcmp(kind, "clear_text")) {
 		s->line = NULL;
+	} else if (!strcmp(kind, "speed")) {
+		s->speed = cJSON_IsNumber(v) && v->valuedouble >= 0 ? (int)v->valuedouble : -1;
+	} else if (!strcmp(kind, "music")) {
+		s->music = cJSON_IsNumber(v) ? (int)v->valuedouble : 0;
+	} else if (!strcmp(kind, "world_map")) {
+		/* 地図点滅: after the map's click the screen and the box are cleared. */
+		clear_layers(s);
+		s->line = NULL;
 	}
+}
+
+void stage_start(struct stage *s, const cJSON *root)
+{
+	memset(s, 0, sizeof *s);
+	s->cast = get(root, "cast");
+	s->speed = -1;
 }
 
 static bool take(const char **p, const char *word, int *num)
@@ -118,10 +139,9 @@ static bool take(const char **p, const char *word, int *num)
 	return true;
 }
 
-void stage_walk(const cJSON *root, const char *place, struct stage *s)
+static void walk(const cJSON *root, const char *place, struct stage *s, bool with_step)
 {
-	memset(s, 0, sizeof *s);
-	s->cast = get(root, "cast");
+	stage_start(s, root);
 	const cJSON *list = get(root, "steps");
 	const char *p = place ? place : "";
 	int k;
@@ -130,11 +150,13 @@ void stage_walk(const cJSON *root, const char *place, struct stage *s)
 	for (;;) {
 		const cJSON *st = list->child;
 		for (int i = 0; st && i < k; i++, st = st->next)
-			apply(s, st);
+			stage_apply(s, st);
 		if (!st)
 			return;
 		if (!*p) {
-			apply(s, st);
+			if (!with_step)
+				return;
+			stage_apply(s, st);
 			const char *kind = step_kind(st);
 			if (kind && !strcmp(kind, "choice"))
 				s->choice = st;
@@ -154,6 +176,16 @@ void stage_walk(const cJSON *root, const char *place, struct stage *s)
 			return;
 		list = next;
 	}
+}
+
+void stage_walk(const cJSON *root, const char *place, struct stage *s)
+{
+	walk(root, place, s, true);
+}
+
+void stage_walk_before(const cJSON *root, const char *place, struct stage *s)
+{
+	walk(root, place, s, false);
 }
 
 /* ---- a line's parts ---- */
@@ -400,6 +432,26 @@ static const char *as_shown(const char *page)
 	return buf;
 }
 
+/* The letters a page shows, as laid out (the spaces where a line breaks are not shown). */
+static int letters_of(const struct laid *L)
+{
+	int n = 0;
+	for (int i = 0; i < L->n; i++)
+		for (const char *c = L->a[i]; c < L->b[i]; c += utf8_len(c))
+			n++;
+	return n;
+}
+
+/* The game's text speed: 字速度's milliseconds a letter, or the Config's middle speed. */
+#define PLAYER_SPEED 23
+#define LETTER_FADE 200.0f
+static int letter_ms(const struct stage *s)
+{
+	return s->speed >= 0 ? s->speed : PLAYER_SPEED;
+}
+
+static ImU32 bad_ink;
+
 int page_lines(const cJSON *line, const char *page)
 {
 	if (!page)
@@ -516,9 +568,9 @@ static void message(const struct pen *P, const struct stage *s, int page)
 			plate(P, f->plate, name);
 	}
 	/* The face shows in frames 1 and 2 only: the game draws none in the E frames. */
-	const cJSON *face = talk && fno <= 2 ? line_face(s->line, s->cast) : NULL;
+	const cJSON *face = talk && fno <= 2 && !s->face_off ? line_face(s->line, s->cast) : NULL;
 	if (face) {
-		layer(P, face, 12, 523);
+		layer(P, face, 12 + s->m.face_dx, 523 + s->m.face_dy);
 		pic(P, media_cg(50006), 0, 511);
 	}
 	static const int button_cg[3] = { 50033, 50036, 50039 };
@@ -534,26 +586,72 @@ static void message(const struct pen *P, const struct stage *s, int page)
 	lay(text, frame_room(f), &L);
 	float k = P->k, size = BOX_TEXT_SIZE * k;
 	float tx = f->x + f->tx + TEXT_DX, ty = f->y + f->ty + TEXT_DY;
-	ImU32 ink = IM_COL32(f->r, f->g, f->b, 255), bad = rgba(0xff, 0x8a, 0x73, 1);
+	bad_ink = rgba(0xff, 0x8a, 0x73, 1);
+	/* While the stage plays, each letter comes in one after another, fading in. */
+	float ms = s->m.text_ms, every = (float)letter_ms(s);
+	bool partial = s->m.playing && ms >= 0 && every > 0 && ms < letters_of(&L) * every - every + LETTER_FADE;
+	int n = 0;
 	for (int i = 0; i < L.n; i++) {
 		bool over = i >= f->lines;
+		ImU32 ink = over ? bad_ink : IM_COL32(f->r, f->g, f->b, 255);
 		V2 a = at(P, tx - (i ? 0 : L.indent), ty + i * BOX_LINE_H);
-		if (f->edge && !over) {
-			static const int d[8][2] = { { -1, -1 }, { 0, -1 }, { 1, -1 }, { -1, 0 }, { 1, 0 }, { -1, 1 }, { 0, 1 }, { 1, 1 } };
-			for (int j = 0; j < 8; j++)
-				ImDrawList_AddText_FontPtr(P->dl, F_GAME, size, v2(a.x + d[j][0] * k, a.y + d[j][1] * k), IM_COL32(0, 0, 0, 255),
-				                           L.a[i], L.b[i], 0, NULL);
+		static const int d[8][2] = { { -1, -1 }, { 0, -1 }, { 1, -1 }, { -1, 0 }, { 1, 0 }, { -1, 1 }, { 0, 1 }, { 1, 1 } };
+		if (!partial) {
+			if (f->edge && !over)
+				for (int j = 0; j < 8; j++)
+					ImDrawList_AddText_FontPtr(P->dl, F_GAME, size, v2(a.x + d[j][0] * k, a.y + d[j][1] * k), IM_COL32(0, 0, 0, 255),
+					                           L.a[i], L.b[i], 0, NULL);
+			ImDrawList_AddText_FontPtr(P->dl, F_GAME, size, a, ink, L.a[i], L.b[i], 0, NULL);
+		} else {
+			for (const char *c = L.a[i]; c < L.b[i]; c += utf8_len(c), n++) {
+				float alpha = (ms - n * every) / LETTER_FADE;
+				if (alpha <= 0)
+					break;
+				if (alpha > 1)
+					alpha = 1;
+				const char *e = c + utf8_len(c);
+				V2 q = v2(a.x + tw(L.a[i], c) * k, a.y);
+				if (f->edge && !over)
+					for (int j = 0; j < 8; j++)
+						ImDrawList_AddText_FontPtr(P->dl, F_GAME, size, v2(q.x + d[j][0] * k, q.y + d[j][1] * k), rgba(0, 0, 0, alpha),
+						                           c, e, 0, NULL);
+				ImDrawList_AddText_FontPtr(P->dl, F_GAME, size, q, (ink & 0x00FFFFFFu) | ((ImU32)(alpha * 255 + 0.5f) << 24), c, e, 0, NULL);
+			}
 		}
-		ImDrawList_AddText_FontPtr(P->dl, F_GAME, size, a, over ? bad : ink, L.a[i], L.b[i], 0, NULL);
-		if (over) {
+		if (over && !partial) {
 			/* Past the box: the game draws it there; the editor marks it. */
 			float uy = a.y + size * 0.86f;
-			ImDrawList_AddLine(P->dl, v2(a.x, uy), v2(a.x + tw(L.a[i], L.b[i]) * k, uy), bad, fmaxf(1, k * 2));
+			ImDrawList_AddLine(P->dl, v2(a.x, uy), v2(a.x + tw(L.a[i], L.b[i]) * k, uy), bad_ink, fmaxf(1, k * 2));
 		}
 	}
-	/* The click mark, after the page (its first picture of five). */
-	if (L.n <= f->lines)
-		pic(P, media_cg(50021), f->mark == 2 ? 930 : 960, f->mark == 2 ? 725 : 709);
+	/* The click mark, after the page: five pictures, 200 ms each, round and round while it waits
+	 * (still, the first). */
+	if (L.n <= f->lines && !partial && !s->m.no_mark) {
+		int no = 50021;
+		if (s->m.playing && ms >= 0) {
+			float since = ms - (every > 0 ? letters_of(&L) * every - every + LETTER_FADE : 0);
+			no += since > 0 ? ((int)(since / 200)) % 5 : 0;
+		}
+		pic(P, media_cg(no), f->mark == 2 ? 930 : 960, f->mark == 2 ? 725 : 709);
+	}
+}
+
+int stage_letters(const cJSON *line, const char *page)
+{
+	if (!page)
+		return 0;
+	int f = line_frame(line);
+	struct laid L;
+	lay(as_shown(page), frame_room(&frames[f ? f : 1]), &L);
+	return letters_of(&L);
+}
+
+float stage_page_ms(const struct stage *s, int page)
+{
+	int every = letter_ms(s);
+	const char *text = s->line ? line_page(s->line, page) : NULL;
+	int n = stage_letters(s->line, text);
+	return every > 0 && n > 0 ? (float)((n - 1) * every) + LETTER_FADE : 0;
 }
 
 /* ---- the choice menu (T_Select) ---- */
@@ -586,8 +684,20 @@ static bool is_sep(const cJSON *r)
 /* The menu as the game builds it: the base 10021 cut to the rows' height and its last 6 lines,
  * buttons 10022 (10029, taller, when fewer than 3 rows can be picked) at 18 in, separators 10023 at
  * 4 in; at the step's x, y, else the game's 300,360, moved up when it would run past the bottom. */
+/* The menu's rows as last drawn, in game pixels, for a click on the stage. */
+static struct { int n; int row[64]; float x[64], y[64], w[64], h[64]; } hits;
+
+int stage_menu_hit(float gx, float gy)
+{
+	for (int i = 0; i < hits.n; i++)
+		if (gx >= hits.x[i] && gx < hits.x[i] + hits.w[i] && gy >= hits.y[i] && gy < hits.y[i] + hits.h[i])
+			return hits.row[i];
+	return -1;
+}
+
 static void menu(const struct pen *P, const cJSON *choice)
 {
+	hits.n = 0;
 	const cJSON *rows = get(choice, "choice");
 	static cJSON *fn_row;
 	if (!fn_row)
@@ -646,6 +756,14 @@ static void menu(const struct pen *P, const cJSON *choice)
 			continue;
 		}
 		pic_part(P, btn, 0, 0, 340, (float)bh, (float)(x + 18), (float)(y + at_y));
+		if (hits.n < 64) {
+			hits.row[hits.n] = i;
+			hits.x[hits.n] = (float)(x + 18);
+			hits.y[hits.n] = (float)(y + at_y);
+			hits.w[hits.n] = 340;
+			hits.h[hits.n] = (float)bh;
+			hits.n++;
+		}
 		const char *text = row_text(r);
 		int cr = 196, cg = 196, cb = 196;
 		const cJSON *jr = get(r, "r"), *jg = get(r, "g"), *jb = get(r, "b");
@@ -664,36 +782,63 @@ static void menu(const struct pen *P, const cJSON *choice)
 	}
 }
 
-void stage_draw(const struct stage *s, int page, float w)
+void stage_paint(ImDrawList *dl, V2 o, float k, const struct stage *s, int page)
 {
-	ImDrawList *dl = igGetWindowDrawList();
-	V2 o = igGetCursorScreenPos();
-	o.x = floorf(o.x);
-	o.y = floorf(o.y);
-	float H = floorf(w * 0.75f);
-	struct pen P = { dl, o, w / 1024.0f };
-	V2 end = v2(o.x + w, o.y + H);
+	V2 end = v2(o.x + 1024 * k, o.y + 768 * k);
 	ImDrawList_PushClipRect(dl, o, end, true);
+	/* Under a shake the screen moves whole, black where it left. */
+	ImDrawList_AddRectFilled(dl, o, end, IM_COL32(0, 0, 0, 255), 0, 0);
+	struct pen P = { dl, v2(o.x + s->m.dx * k, o.y + s->m.dy * k), k };
 
 	/* The screen's colour, then the layers by their z: the wallpaper (8001), the mask wallpaper
 	 * (8011), the scene CG (8021), the background at 0,39 (8031), the small CG at 513,271 (8041),
 	 * the standing picture (8051). */
-	ImU32 base = s->screen == 'w' ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 255);
-	ImDrawList_AddRectFilled(dl, o, end, base, 0, 0);
+	ImU32 base = s->screen == 'w' ? IM_COL32(255, 255, 255, 255) : s->screen == 'c' ? s->screen_col : IM_COL32(0, 0, 0, 255);
+	ImDrawList_AddRectFilled(dl, at(&P, 0, 0), at(&P, 1024, 768), base, 0, 0);
 	layer(&P, s->layer[L_WALL], 0, 0);
 	if (s->layer[L_MASK])
 		layer(&P, s->layer[L_MASK], 0, 0);
 	else if (s->mask_cg > 0)
 		pic(&P, media_cg(s->mask_cg), 0, 0);
 	layer(&P, s->layer[L_CG], 0, 0);
-	layer(&P, s->layer[L_BG], 0, 39);
+	layer(&P, s->layer[L_BG], s->m.bg_x, 39);
 	layer(&P, s->layer[L_MINI], 513, 271);
-	layer(&P, s->layer[L_PORTRAIT], 0, 0);
+	layer(&P, s->layer[L_PORTRAIT], s->m.portrait_dx, s->m.portrait_dy);
 
 	message(&P, s, page);
 	if (s->choice)
 		menu(&P, s->choice);
+	if (s->m.white > 0)
+		ImDrawList_AddRectFilled(dl, o, end, rgba(255, 255, 255, s->m.white > 1 ? 1 : s->m.white), 0, 0);
 	ImDrawList_PopClipRect(dl);
-	ImDrawList_AddRect(dl, o, end, col(C_BORDER), S(4), S(1), 0);
+}
+
+/* The stage's place at the cursor, w wide: its top left. */
+static V2 stage_place(float w, float *H)
+{
+	V2 o = igGetCursorScreenPos();
+	o.x = floorf(o.x);
+	o.y = floorf(o.y);
+	*H = floorf(w * 0.75f);
+	return o;
+}
+
+void stage_draw(const struct stage *s, int page, float w)
+{
+	ImDrawList *dl = igGetWindowDrawList();
+	float H;
+	V2 o = stage_place(w, &H);
+	stage_paint(dl, o, w / 1024.0f, s, page);
+	ImDrawList_AddRect(dl, o, v2(o.x + w, o.y + H), col(C_BORDER), S(4), S(1), 0);
+	igDummy(v2(w, H));
+}
+
+void stage_draw_texture(unsigned tex, float w)
+{
+	ImDrawList *dl = igGetWindowDrawList();
+	float H;
+	V2 o = stage_place(w, &H);
+	ImDrawList_AddImage(dl, texref(tex), o, v2(o.x + w, o.y + H), v2(0, 0), v2(1, 1), IM_COL32_WHITE);
+	ImDrawList_AddRect(dl, o, v2(o.x + w, o.y + H), col(C_BORDER), S(4), S(1), 0);
 	igDummy(v2(w, H));
 }

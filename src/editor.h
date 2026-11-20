@@ -163,10 +163,23 @@ const char *media_face_owner(int face);   /* rq.ids' character for a face CG, or
 const char *media_face_name(int face);    /* the plate's name for it, from the game's table */
 bool media_plates_known(void);            /* the game's table was read from its .ain */
 const char *media_music_name(int no);     /* rq.ids.music's name, or NULL */
+/* A place of the game's world map (1 to 40), as its code names it, and its point. */
+#define PLACES_MAX 40
+bool media_place(int no, int *x, int *y, const char **name);
 bool media_can_play(int kind, int no);
 bool media_playing(int kind, int no);
 void media_play(int kind, int no);        /* plays, or stops when it is playing */
 void media_stop(void);
+/* Play from here: a sound beside the music (a jingle, a sound), and the music with a fade in ms
+ * (-1: the game's, none). No sound for 0. */
+/* Play from here's sounds (mixer.c): several at once, the music as the game's SYS_PlayBGM plays it. */
+void mixer_sound(int no);
+void mixer_music(int no, int effect, int ms);   /* effect and ms -1: the game's defaults (at once) */
+int mixer_music_now(void);
+void mixer_stop(int fade_ms);
+double mixer_sound_ms(int no);                  /* a sound's length in ms, 0 when unknown */
+void mixer_shutdown(void);
+int mixer_check(void);                          /* --mixer-check: 0 when every check holds */
 
 /* ---- the stage (stage.c): the game's screen at a step, from the game's own pieces ---- */
 
@@ -176,17 +189,44 @@ enum { L_WALL, L_MASK, L_BG, L_PORTRAIT, L_MINI, L_CG, L_COUNT };
  * message box and, when the step is a choice, its rows. Values point into the file's JSON. */
 struct stage {
 	const cJSON *layer[L_COUNT];
-	int screen;              /* the screen's colour under the pictures: 0, 'b' black, 'w' white */
+	int screen;              /* the screen's colour under the pictures: 0, 'b' black, 'w' white, 'c' screen_col */
+	ImU32 screen_col;
 	int mask_cg;             /* the mask wallpaper a set puts in (the game's 5550), when no step named one */
 	const cJSON *line;       /* the say, think or narrate on show */
+	bool face_off;           /* the face cleared since the line (a scene CG, a set, black, white, clear) */
+	int speed;               /* the text's milliseconds a letter (speed): -1 the player's, 0 at once */
+	int music;               /* the track the steps so far put on, 0 none (not drawn) */
 	const cJSON *choice;     /* the selected step, when it is a choice */
 	const cJSON *cast;
 	const char *line_name;   /* a name plate given by the caller (the cast tab), or NULL */
+	/* What moves while the stage plays (play.c); all 0 while it stands still. In game pixels. */
+	struct {
+		bool playing;
+		float bg_x;                       /* the background's x from its place: a slide */
+		float dx, dy;                     /* the screen's shake */
+		float face_dx, face_dy, portrait_dx, portrait_dy;
+		float text_ms;                    /* since the page began to show: its letters come in */
+		bool no_mark;                     /* no click mark (the page does not wait) */
+		float white;                      /* white over the screen, 0 to 1 */
+	} m;
 };
 
+void stage_start(struct stage *s, const cJSON *root);       /* the stage before a file's first step */
+void stage_apply(struct stage *s, const cJSON *step);        /* the stage after a step */
 void stage_walk(const cJSON *root, const char *place, struct stage *s);
 /* Draws the stage at the cursor, w wide (4:3), the line's page `page` (from 0). */
 void stage_draw(const struct stage *s, int page, float w);
+/* The stage drawn into a draw list, its top left at o, k pixels to a game pixel. */
+void stage_paint(ImDrawList *dl, V2 o, float k, const struct stage *s, int page);
+/* A texture of the game's screen (fx.c) at the cursor in the stage's place, w wide. */
+void stage_draw_texture(unsigned tex, float w);
+/* The letters of a page as the game shows them, and how long the page takes to come in. */
+int stage_letters(const cJSON *line, const char *page);
+float stage_page_ms(const struct stage *s, int page);
+/* The choice row (its index in the step's list) the menu last drawn has at a game pixel, or -1. */
+int stage_menu_hit(float gx, float gy);
+/* The stage before the step at a place (stage_walk without the step itself). */
+void stage_walk_before(const cJSON *root, const char *place, struct stage *s);
 /* The game's message frame for a line (1 a line, 2 a thought, 3 narration, 4 on paper, 6 to 8 the
  * E frames of a page: true line), or 0; and the lines its box holds (4, or 3 in an E frame). */
 int line_frame(const cJSON *line);
@@ -206,6 +246,57 @@ const cJSON *line_face(const cJSON *line, const cJSON *cast);
  * 35 pixels apart (its size 40 and line space -5). Other text of the game's is drawn at its size times BOX_TEXT_SIZE / 40. */
 #define BOX_TEXT_SIZE 43.6f
 #define BOX_LINE_H 35.0f
+
+/* ---- the game's transitions (fx.c) ---- */
+
+#define FX_W 1024
+#define FX_H 768
+#define FX_SLOTS 4           /* textures of the game's screen to draw into */
+#define EFFECT_LAST 60       /* the engine's effects: 1 to 60 */
+
+bool fx_ok(void);                       /* the textures could be made */
+ImDrawList *fx_draw(int slot);          /* a draw list in game pixels for the texture, drawn after the frame */
+void fx_mix(int out, int effect, int old, int new, float p);   /* the transition at p, 0 to 1 */
+/* The game's スプライトズーム: the screen in `under` covered in the shape CG's top left colour but
+ * where the shape, `mag` times its size about the middle, is clear. */
+void fx_shape(int out, int under, unsigned shape_tex, int w, int h, float mag);
+unsigned fx_texture(int slot);
+void fx_render(void);                   /* after igRender: the frame's textures, in order */
+void fx_shutdown(void);                 /* before Dear ImGui's context goes */
+const char *effect_name(int no);        /* the engine's effect in words, or NULL */
+bool effect_written(int no);            /* xsystem4 draws it (else it plays as 51) */
+int effect_played(int no);              /* what plays: the number, 51, 27 (a shake) or 0 (at once) */
+
+/* ---- the stage playing (play.c) ---- */
+
+/* Plays the step at a place of the open file from the stage before it (one), or on through the
+ * steps after it (on). */
+void play_start(const char *place, bool on);
+void play_stop(void);
+bool play_active(void);
+bool play_on(void);                     /* playing on (Play from here) */
+/* While playing: draws the stage at the cursor, w wide, takes its clicks, and returns true. */
+bool play_draw(float w);
+void play_key(void);                    /* Space or Enter: the next page, as a click */
+void play_effect_preview(int effect);   /* while an effect is hovered in a list: the step played with it */
+#define PREVIEW_DEFAULT (-2)            /* play_effect_preview's "the step's default" (a mode for a shake) */
+const char *play_note(void);            /* what the player passed by, or "" */
+const char *play_step_place(void);      /* the place of the step playing, or "" */
+void play_pick(int row);                /* a row of the menu on show clicked */
+void play_answer(bool then);            /* the if asked: then or else */
+const char *play_status(void);          /* what the player waits for, and its note */
+bool play_preview(void);                /* playing an effect's preview */
+const char *play_place(void);           /* the place it began at */
+/* The game's shake mode for the screen (part 0), the face (1) or the standing picture (2): the size
+ * across and up and down in game pixels, and the time in ms. */
+void shake_mode(int part, int mode, float *sx, float *sy, float *ms);
+/* The world map's tag (T_WorldMap): the place tag's Flash at a point and the name over it, ms since
+ * the map came in. */
+void map_tag_paint(ImDrawList *dl, V2 o, float k, int x, int y, const char *name, double ms);
+/* A Flash file of the game's (by its name without a folder) at x, y of the 1024 by 768 screen, ms into its
+ * loop; false when it is not there. */
+bool flash_draw(ImDrawList *dl, V2 o, float k, const char *base, float x, float y, double ms);
+void play_fixed_clock(double ms);       /* --shot: the clock held at ms after the start (-1: free) */
 
 /* ---- the selected step's fields (fields.c) ---- */
 

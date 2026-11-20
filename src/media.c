@@ -252,6 +252,70 @@ static int op_at(const uint8_t *p)
 	return p[0] | p[1] << 8;
 }
 
+/* ---- the game's world map ---- */
+
+/* The places a quest's start shows on the world map (地図点滅), from the game's 世界地図データ取得:
+ * for each number, if (no == N) { name = "..."; xx = X; yy = Y; }. Read from its code: the test of
+ * no against N (SH_IF_LOC_NE_IMM, or PUSH N before EQUALE) starts a place; the string assigned after
+ * it (SH_S_ASSIGN_STR0, or S_PUSH) is the name, the two PUSHes after that the point. */
+struct place { char *name; int x, y; };
+static struct place places[PLACES_MAX + 1];
+
+static void places_read(struct ain *ain)
+{
+	for (int i = 0; i <= PLACES_MAX; i++) {
+		free(places[i].name);
+		places[i].name = NULL;
+	}
+	char name[] = "\xE4\xB8\x96\xE7\x95\x8C\xE5\x9C\xB0\xE5\x9B\xB3\xE3\x83\x87\xE3\x83\xBC\xE3\x82\xBF\xE5\x8F\x96\xE5\xBE\x97";   /* 世界地図データ取得 */
+	int fn = ain_get_function(ain, name);
+	if (fn < 0)
+		return;
+	const uint8_t *c = ain->code;
+	size_t p = (size_t)ain->functions[fn].address;
+	int no = -1, nums = 0, x = 0;
+	const char *text = NULL;
+	while (p + 2 <= ain->code_size) {
+		int op = op_at(c + p);
+		if (op == ENDFUNC || op >= NR_OPCODES)
+			break;
+		int width = instruction_width(op);
+		if (width <= 0 || p + (size_t)width > ain->code_size)
+			break;
+		if (op == SH_IF_LOC_NE_IMM || (op == PUSH && p + 8 <= ain->code_size && op_at(c + p + 6) == EQUALE)) {
+			no = at32(c + p + (op == PUSH ? 2 : 6));
+			text = NULL;
+			nums = 0;
+		} else if ((op == S_PUSH || op == SH_S_ASSIGN_STR0) && no > 0) {
+			int str = at32(c + p + 2);
+			text = str >= 0 && str < ain->nr_strings ? ain->strings[str]->text : NULL;
+			nums = 0;
+		} else if (op == PUSH && text && no > 0 && no <= PLACES_MAX) {
+			int v = at32(c + p + 2);
+			if (nums++ == 0) {
+				x = v;
+			} else {
+				free(places[no].name);
+				places[no].name = strdup(text);
+				places[no].x = x;
+				places[no].y = v;
+				text = NULL;
+			}
+		}
+		p += (size_t)width;
+	}
+}
+
+bool media_place(int no, int *x, int *y, const char **name)
+{
+	if (no < 1 || no > PLACES_MAX || !places[no].name)
+		return false;
+	*x = places[no].x;
+	*y = places[no].y;
+	*name = places[no].name;
+	return true;
+}
+
 static void plates_load(void)
 {
 	for (int i = 0; i < PLATES; i++) {
@@ -267,6 +331,7 @@ static void plates_load(void)
 	struct ain *ain = ain_open_conv(path, to_utf8, &err);
 	if (!ain)
 		return;
+	places_read(ain);
 	char name[] = "\xE9\xA1\x94\xE7\x99\xBB\xE9\x8C\xB2";   /* 顔登録 */
 	int fn = ain_get_function(ain, name);
 	int found = 0;
