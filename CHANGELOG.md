@@ -2,7 +2,7 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
-## 1.0.0 (not released)
+## 1.0.0 (2026-11-20)
 
 The first release: in RQ MOD's package since 2.62.1 (`rq-scene-editor.exe` in the game's
 `xsystem4` folder, beside `xsystem4.exe`), and as a zip of its own.
