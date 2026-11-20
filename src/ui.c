@@ -47,6 +47,9 @@ static char (*vis)[256];
 static int nvis, capvis;
 
 static bool problems_folded;
+static int panel_tab;           /* the bottom panel: 0 the problems, 1 the game's log */
+static bool log_override;       /* --do logfile=PATH: another log than the game's */
+static char pending_sel[256];   /* a place to select once the file asked for is open */
 static int want_mid_tab = -1;   /* 0 Steps, 1 Cast and file: opened next frame */
 static bool cast_tab_shown;     /* the middle shows Cast and file: the right side shows the cast's pick */
 static int last_problem_count;
@@ -380,6 +383,11 @@ static void do_pending(int what, const char *arg)
 	switch (what) {
 	case P_FILE:
 		open_file(arg);
+		if (pending_sel[0] && D.root && place_exists(D.root, pending_sel)) {
+			select_place(pending_sel, true);
+			want_mid_tab = 0;
+		}
+		pending_sel[0] = 0;
 		break;
 	case P_MOD:
 		open_mod(mod_find(arg), NULL);
@@ -930,13 +938,29 @@ static void file_row(int i)
 	ImDrawList_AddText_FontPtr(dl, F_UI, size, v2(p.x + S(10), y), col(C_FAINT), "\xE2\x96\xA4", NULL, 0, NULL);
 	const char *name = f->in_scenes ? f->rel + 7 : f->rel;
 	char meta[64];
-	if (f->read)
-		snprintf(meta, sizeof meta, "%d line%s", f->lines, f->lines == 1 ? "" : "s");
-	else
+	int errors = 0, warnings = 0, mc = C_FAINT;
+	if (sel && D.root) {
+		const struct problems *ps = problems_now();
+		errors = ps->errors;
+		warnings = ps->warnings;
+	} else if (f->read && mod_now()) {
+		problems_count_file(f->path, mod_now()->dir, f->mtime, f->size, &errors, &warnings);
+	}
+	if (!f->read && !(sel && D.root)) {
 		snprintf(meta, sizeof meta, "%s", "cannot be read");
+		mc = C_BAD;
+	} else if (errors) {
+		snprintf(meta, sizeof meta, "%d problem%s", errors, errors == 1 ? "" : "s");
+		mc = C_BAD;
+	} else if (warnings) {
+		snprintf(meta, sizeof meta, "%d warning%s", warnings, warnings == 1 ? "" : "s");
+		mc = C_WARN;
+	} else {
+		snprintf(meta, sizeof meta, "%d line%s", f->lines, f->lines == 1 ? "" : "s");
+	}
 	float msize = fs(13), mw = text_w(F_UI, msize, meta);
 	draw_text(dl, F_UI, size, v2(p.x + S(32), y), col(sel ? C_TEXT : C_TEXT), name, p.x + w - mw - S(16));
-	ImDrawList_AddText_FontPtr(dl, F_UI, msize, v2(p.x + w - mw - S(8), p.y + (h - msize) / 2), col(f->read ? C_FAINT : C_BAD),
+	ImDrawList_AddText_FontPtr(dl, F_UI, msize, v2(p.x + w - mw - S(8), p.y + (h - msize) / 2), col(mc),
 	                           meta, NULL, 0, NULL);
 	igPopID();
 }
@@ -1209,11 +1233,13 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 {
 	igPushID_Str(place);
 	bool sel = !strcmp(UI.sel, place);
-	float h = S(40);
+	const struct problem *prob = NULL;
+	int nprob = problems_at(place, &prob);
+	float h = S(40), H = h + (nprob ? S(18) : 0);
 	V2 p = igGetCursorScreenPos();
 	float w = igGetContentRegionAvail().x;
 	igSetNextItemAllowOverlap();
-	if (igSelectable_Bool("##row", sel, ImGuiSelectableFlags_AllowDoubleClick, v2(w, h))) {
+	if (igSelectable_Bool("##row", sel, ImGuiSelectableFlags_AllowDoubleClick, v2(w, H))) {
 		select_place(place, false);
 		const char *kind = step_kind(st);
 		if (igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left) && kind && !strcmp(kind, "goto")) {
@@ -1232,17 +1258,29 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 		igEndDragDropSource();
 	}
 	if (doc_editable())
-		step_drop_target(place, p, v2(p.x + w, p.y + h), p.x + S(42) + (float)depth * S(22));
+		step_drop_target(place, p, v2(p.x + w, p.y + H), p.x + S(42) + (float)depth * S(22));
 	if (sel && UI.scroll_to_sel) {
 		igSetScrollHereY(0.4f);
 		UI.scroll_to_sel = false;
 	}
 	vis_add(place);
 	ImDrawList *dl = igGetWindowDrawList();
-	V2 b = v2(p.x + w, p.y + h);
+	V2 b = v2(p.x + w, p.y + H);
 	if (sel) {
 		ImDrawList_AddRect(dl, p, b, col_a(C_ACCENT, 0.6f), S(3), S(1), 0);
 		ImDrawList_AddRectFilled(dl, p, v2(p.x + S(3), b.y), col(C_SEL_BAR), 0, 0);
+	}
+	if (nprob) {
+		/* Its first problem under it, and a mark at the left in the problem's colour. */
+		ImU32 pc = col(prob->level == PROB_ERROR ? C_BAD : C_WARN);
+		if (!sel)
+			ImDrawList_AddRectFilled(dl, p, v2(p.x + S(3), b.y), pc, 0, 0);
+		char pm[700];
+		if (nprob > 1)
+			snprintf(pm, sizeof pm, "%s  (and %d more)", prob->msg, nprob - 1);
+		else
+			snprintf(pm, sizeof pm, "%s", prob->msg);
+		draw_text(dl, F_UI, fs(13), v2(p.x + S(42) + (float)depth * S(22) + S(80), p.y + h - S(4)), pc, pm, b.x - S(10));
 	}
 	/* The step Play from here is on: a mark, and the list brought to it when it moves on. */
 	if (play_on() && !strcmp(play_step_place(), place)) {
@@ -1278,7 +1316,7 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 			if (face)
 				draw_picture_small(dl, face, fa, fb, true);
 			else
-				ImDrawList_AddRect(dl, fa, fb, col(C_LINE), S(3), 0, S(1));
+				ImDrawList_AddRect(dl, fa, fb, col(C_LINE), S(3), S(1), 0);
 			x += S(36);
 			bool game = false;
 			const char *who = line_plate(st, cast, &game);
@@ -1365,12 +1403,8 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 		const char *to = NULL;
 		if (k && !strcmp(k->key, "goto")) {
 			to = cJSON_IsString(v) ? label_place(v->valuestring) : NULL;
-			if (!to) {
-				tc = col(C_BAD);
-				snprintf(buf, sizeof buf, "%s  \xC2\xB7 no such label in the file", sum);
-				free(sum);
-				sum = xstrdup(buf);
-			}
+			if (!to)
+				tc = col(C_BAD);   /* the problem under it says why */
 		}
 		draw_text(dl, f, size, v2(x, ty), tc, sum, right);
 		if (to)
@@ -1409,6 +1443,10 @@ static bool branch_row(const char *id, int depth, const char *label, const char 
 	ImGuiStorage *store = igGetStateStorage();
 	ImGuiID key = igGetID_Str("##open");
 	bool open = ImGuiStorage_GetBool(store, key, true);
+	if (!open && UI.scroll_to_sel && list && !strncmp(UI.sel, list, strlen(list)) && UI.sel[strlen(list)] == '[') {
+		open = true;   /* a step inside it selected from elsewhere (a problem, a go-to, a label) */
+		ImGuiStorage_SetBool(store, key, open);
+	}
 	float h = S(26);
 	V2 p = igGetCursorScreenPos();
 	float w = igGetContentRegionAvail().x;
@@ -1518,7 +1556,7 @@ static void draw_steps(cJSON *list, const char *lp, int depth, const cJSON *cast
 					}
 					if (o < sizeof hint && cJSON_IsString(go)) {
 						bool there = label_place(go->valuestring) != NULL;
-						o += (size_t)snprintf(hint + o, sizeof hint - o, "\xE2\x86\xAA %s%s", go->valuestring, there ? "" : "  \xC2\xB7 no such label");
+						o += (size_t)snprintf(hint + o, sizeof hint - o, "\xE2\x86\xAA %s", go->valuestring);
 						if (!there)
 							hint_col = col(C_BAD);
 					}
@@ -1534,6 +1572,12 @@ static void draw_steps(cJSON *list, const char *lp, int depth, const cJSON *cast
 					char *j = json_inline(row);
 					snprintf(label, sizeof label, "Row %d  %s", r + 1, j);
 					free(j);
+				}
+				const struct problem *rprob = NULL;
+				int nr = problems_at(rp, &rprob);
+				if (nr) {
+					snprintf(hint, sizeof hint, "%s%s", rprob->msg, nr > 1 ? "  (and more)" : "");
+					hint_col = col(rprob->level == PROB_ERROR ? C_BAD : C_WARN);
 				}
 				char sp[256];
 				snprintf(sp, sizeof sp, "%s.steps", rp);
@@ -1681,8 +1725,17 @@ static void cast_tab(void)
 			}
 			ImDrawList *dl = igGetWindowDrawList();
 			float size = igGetFontSize();
-			ImDrawList_AddText_FontPtr(dl, F_MONO, fs(MONO_SIZE), v2(p.x + S(6), p.y + (h - fs(MONO_SIZE)) / 2), col(C_TEXT),
+			char cp[200];
+			snprintf(cp, sizeof cp, "cast.%s", e->string);
+			const struct problem *prob = NULL;
+			int ncp = problems_at(cp, &prob);
+			int nc = ncp ? (prob->level == PROB_ERROR ? C_BAD : C_WARN) : C_TEXT;
+			if (ncp)   /* the entry's problem: a mark at the left, its name in the problem's colour */
+				ImDrawList_AddRectFilled(dl, v2(p.x - S(4), p.y + S(6)), v2(p.x - S(1), p.y + h - S(6)), col(nc), 0, 0);
+			ImDrawList_AddText_FontPtr(dl, F_MONO, fs(MONO_SIZE), v2(p.x + S(6), p.y + (h - fs(MONO_SIZE)) / 2), col(nc),
 			                           e->string, NULL, 0, NULL);
+			if (ncp && igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+				igSetTooltip("%s%s", prob->msg, ncp > 1 ? "\n(and more: see Problems)" : "");
 			igTableNextColumn();
 			p = igGetCursorScreenPos();
 			const cJSON *face = cJSON_GetObjectItemCaseSensitive(e, "face");
@@ -1835,6 +1888,30 @@ static void middle(void)
 }
 
 /* ---- the right side: the selected step ---- */
+
+/* The problems at a place, under its heading in the fields. */
+static void place_problems(const char *place)
+{
+	const struct problems *ps = problems_now();
+	bool any = false;
+	for (int i = 0; i < ps->n; i++) {
+		const struct problem *pr = &ps->p[i];
+		if (strcmp(pr->place, place))
+			continue;
+		const char *rest = pr->at;
+		size_t pl = strlen(place);
+		if (!strncmp(rest, place, pl))
+			rest += pl;
+		if (*rest == '.')
+			rest++;
+		igPushTextWrapPos(0);
+		igTextColored(colv(pr->level == PROB_ERROR ? C_BAD : C_WARN), "\xE2\x97\x8F %s%s%s", rest, rest[0] ? ": " : "", pr->msg);
+		igPopTextWrapPos();
+		any = true;
+	}
+	if (any)
+		igSpacing();
+}
 
 static void fill_edit(void)
 {
@@ -2099,6 +2176,7 @@ static void right_side(void)
 		igTextColored(colv(C_FAINT), "%s", UI.sel);
 		igPopFont();
 		igSpacing();
+		place_problems(UI.sel);
 		bool ro = !doc_editable();
 		if (ro)
 			igTextColored(colv(C_FAINT), "Read-only: %s", D.root ? "this editor does not write this file" : "the file cannot be read");
@@ -2132,6 +2210,7 @@ static void right_side(void)
 	igTextColored(colv(C_FAINT), "%s", UI.sel);
 	igPopFont();
 	igSpacing();
+	place_problems(UI.sel);
 	bool ro = !doc_editable();
 	if (ro)
 		igTextColored(colv(C_FAINT), "Read-only: %s", D.root ? "this editor does not write this file" : "the file cannot be read");
@@ -2201,6 +2280,7 @@ static void cast_side(void)
 	igTextColored(colv(C_FAINT), "%s", where);
 	igPopFont();
 	igSpacing();
+	place_problems(where);
 	bool ro = !doc_editable();
 	const char *now = fields_cast(cast_sel, ro);
 	if (strcmp(now, cast_sel))
@@ -2240,41 +2320,271 @@ static void cast_side(void)
 
 static int problem_count(void)
 {
-	return D.open && D.why[0] ? 1 : 0;
+	if (!D.open)
+		return 0;
+	if (!D.root)
+		return D.why[0] ? 1 : 0;
+	return problems_now()->n;
+}
+
+static bool panel_open(int n)
+{
+	return !problems_folded && (n > 0 || panel_tab == 1);
+}
+
+/* A problem's place clicked: its step or row, or its cast entry. */
+static void go_to_problem(const char *place)
+{
+	if (!strncmp(place, "cast", 4)) {
+		if (place[4] == '.')
+			snprintf(cast_sel, sizeof cast_sel, "%s", place + 5);
+		want_mid_tab = 1;
+	} else if (place[0]) {
+		select_place(place, true);
+		want_mid_tab = 0;
+	}
+}
+
+static void problems_list(void)
+{
+	if (!D.open)
+		return;
+	float lh = igGetTextLineHeight() + S(6), pw = S(250);
+	if (!D.root) {
+		igTextColored(colv(C_BAD), "\xE2\x97\x8F");
+		igSameLine(0, S(8));
+		igPushTextWrapPos(0);
+		igText("%s: %s", D.rel, D.why);
+		igPopTextWrapPos();
+		return;
+	}
+	const struct problems *ps = problems_now();
+	ImDrawList *dl = igGetWindowDrawList();
+	char shown[200];   /* the place the right side shows: the selected step or row, or the cast entry */
+	if (cast_tab_shown)
+		snprintf(shown, sizeof shown, "cast.%s", cast_sel);
+	else
+		snprintf(shown, sizeof shown, "%s", UI.sel);
+	for (int i = 0; i < ps->n; i++) {
+		const struct problem *pr = &ps->p[i];
+		igPushID_Int(i);
+		V2 p = igGetCursorScreenPos();
+		float w = igGetContentRegionAvail().x;
+		bool here = pr->place[0] && !strcmp(pr->place, shown);
+		if (igSelectable_Bool("##p", here, pr->place[0] ? 0 : ImGuiSelectableFlags_Disabled, v2(w, lh)))
+			go_to_problem(pr->place);
+		bool hov = igIsItemHovered(0);
+		ImU32 pc = col(pr->level == PROB_ERROR ? C_BAD : C_WARN);
+		float y = p.y + (lh - igGetFontSize()) / 2;
+		ImDrawList_AddText_FontPtr(dl, F_UI, igGetFontSize(), v2(p.x + S(4), y), pc, "\xE2\x97\x8F", NULL, 0, NULL);
+		const char *at = pr->at[0] ? pr->at : pr->place[0] ? pr->place : "the file";
+		draw_text(dl, F_MONO, fs(13), v2(p.x + S(22), p.y + (lh - fs(13)) / 2), col(C_FAINT), at, p.x + pw);
+		draw_text(dl, F_UI, igGetFontSize(), v2(p.x + pw + S(12), y), col(pr->level == PROB_ERROR ? C_TEXT : C_DIM), pr->msg, p.x + w - S(6));
+		if (hov && text_w(F_UI, igGetFontSize(), pr->msg) > w - pw - S(18))
+			igSetTooltip("%s", pr->msg);
+		igPopID();
+	}
+}
+
+/* A line of the game's log naming a place of one of the mod's scene files: that file and place. */
+static bool log_link(const char *line, char *rel, size_t rn, char *place, size_t pn)
+{
+	for (int i = 0; i < NFILES; i++) {
+		const char *at = strstr(line, FILES[i].rel);
+		if (!at || at[strlen(FILES[i].rel)] != ':' || at[strlen(FILES[i].rel) + 1] != ' ')
+			continue;
+		const char *q = at + strlen(FILES[i].rel) + 2;
+		char where[256];
+		size_t k = strcspn(q, ": ");
+		snprintf(where, sizeof where, "%.*s", (int)k, q);
+		problem_place(where, place, pn);
+		snprintf(rel, rn, "%s", FILES[i].rel);
+		return true;
+	}
+	return false;
+}
+
+static bool log_all;
+
+/* A log line's place clicked: its file opened (or the open one), the place selected. */
+static void log_go(const char *rel, const char *place)
+{
+	snprintf(pending_sel, sizeof pending_sel, "%s", place);
+	if (D.open && !strcmp(D.rel, rel)) {
+		go_to_problem(place);
+		pending_sel[0] = 0;
+	} else {
+		want(P_FILE, rel);
+	}
+}
+
+/* The Nth line the log tab shows, as a click on it does (--do loglink=N). */
+static bool log_click(int n)
+{
+	const struct mod *m = mod_now();
+	const char *mod = log_all || !m ? NULL : m->id;
+	for (int i = 0, k = 0; i < gamelog_count(); i++) {
+		const char *line = gamelog_line(i);
+		if (!gamelog_for(line, mod) || k++ != n)
+			continue;
+		char rel[512], place[256];
+		if (!log_link(line, rel, sizeof rel, place, sizeof place))
+			return false;
+		log_go(rel, place);
+		return true;
+	}
+	return false;
+}
+
+static void log_list(void)
+{
+	const struct mod *m = mod_now();
+	const char *mod = log_all ? NULL : m ? m->id : NULL;
+	if (!gamelog_exists()) {
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_FAINT), "No log yet: RQ MOD writes logs/rqmod.log in the game's folder when the game starts, "
+		              "and the lines come here as the game writes them.");
+		igPopTextWrapPos();
+		return;
+	}
+	/* The lines shown, again when lines come or the mod changes. */
+	static int *idx, nidx, capidx;
+	static unsigned seen_gen = (unsigned)-1;
+	static char seen_mod[128];
+	static bool seen_all;
+	if (seen_gen != gamelog_gen() || strcmp(seen_mod, mod ? mod : "") || seen_all != log_all) {
+		seen_gen = gamelog_gen();
+		snprintf(seen_mod, sizeof seen_mod, "%s", mod ? mod : "");
+		seen_all = log_all;
+		nidx = 0;
+		for (int i = 0; i < gamelog_count(); i++) {
+			if (!gamelog_for(gamelog_line(i), mod))
+				continue;
+			if (nidx == capidx) {
+				capidx = capidx ? capidx * 2 : 256;
+				idx = realloc(idx, (size_t)capidx * sizeof *idx);
+			}
+			idx[nidx++] = i;
+		}
+	}
+	float lh = fs(13) + S(5);
+	ImDrawList *dl = igGetWindowDrawList();
+	bool at_end = igGetScrollY() >= igGetScrollMaxY() - S(2);
+	ImGuiListClipper *clip = ImGuiListClipper_ImGuiListClipper();
+	ImGuiListClipper_Begin(clip, nidx, lh);
+	while (ImGuiListClipper_Step(clip)) {
+		for (int j = clip->DisplayStart; j < clip->DisplayEnd; j++) {
+			const char *line = gamelog_line(idx[j]);
+			if (!line)
+				continue;
+			igPushID_Int(j);
+			V2 p = igGetCursorScreenPos();
+			float w = igGetContentRegionAvail().x;
+			char rel[512], place[256];
+			bool link = log_link(line, rel, sizeof rel, place, sizeof place);
+			if (igSelectable_Bool("##l", false, link ? 0 : ImGuiSelectableFlags_Disabled, v2(w, lh)) && link)
+				log_go(rel, place);
+			bool hov = igIsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+			const char *tag_end = line[0] == '[' ? strchr(line, ']') : NULL;
+			int c = C_TEXT;
+			if (strstr(line, "rror") || strstr(line, "ERROR") || strstr(line, "failed") || strstr(line, "stack traceback"))
+				c = C_BAD;
+			else if (tag_end && !strncmp(line, "[rqmod]", 7))
+				c = C_DIM;
+			float x = p.x + S(4), y = p.y + (lh - fs(13)) / 2;
+			if (tag_end) {
+				char tag[160];
+				snprintf(tag, sizeof tag, "%.*s", (int)(tag_end - line + 1), line);
+				draw_text(dl, F_MONO, fs(13), v2(x, y), col(C_FAINT), tag, p.x + w);
+				x += text_w(F_MONO, fs(13), tag) + S(6);
+				line = tag_end + 1;
+				while (*line == ' ')
+					line++;
+			}
+			draw_text(dl, F_MONO, fs(13), v2(x, y), col(link && hov ? C_ACCENT_HI : c), line, p.x + w - S(6));
+			if (hov && (link || text_w(F_MONO, fs(13), line) > p.x + w - S(6) - x))
+				igSetTooltip("%s%s", link ? "Click: go to it in the file\n" : "", gamelog_line(idx[j]));
+			igPopID();
+		}
+	}
+	ImGuiListClipper_End(clip);
+	ImGuiListClipper_destroy(clip);
+	if (at_end)
+		igSetScrollHereY(1.0f);
+	if (!nidx)
+		igTextColored(colv(C_FAINT), mod ? "No line of %s in the game's log yet." : "The game's log is empty.", mod ? mod : "");
+}
+
+static bool tab_button(const char *label, bool on, ImU32 ink)
+{
+	igPushStyleColor_Vec4(ImGuiCol_Button, on ? colv(C_RAISE) : v4(0, 0, 0, 0));
+	igPushStyleColor_Vec4(ImGuiCol_Border, v4(0, 0, 0, 0));
+	igPushStyleColor_U32(ImGuiCol_Text, ink);
+	bool hit = igButton(label, v2(0, 0));
+	igPopStyleColor(3);
+	return hit;
 }
 
 static void bottom_panel(float tabs_h, float panel_h)
 {
 	int n = problem_count();
-	if (n > 0 && last_problem_count == 0)
+	if (n > 0 && last_problem_count == 0 && problems_folded) {
 		problems_folded = false;
+		panel_tab = 0;
+	}
 	last_problem_count = n;
-	bool open = n > 0 && !problems_folded;
+	bool open = panel_open(n);
 
 	igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, v2(S(12), (tabs_h - igGetFrameHeight()) / 2));
 	igBeginChild_Str("##tabs", v2(0, tabs_h), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
 	igPopStyleVar(1);
-	char label[64];
-	snprintf(label, sizeof label, "%s  Problems  %d###problems", open ? "\xE2\x96\xBE" : "\xE2\x96\xB4", n);
-	igPushStyleColor_Vec4(ImGuiCol_Button, v4(0, 0, 0, 0));
-	igPushStyleColor_Vec4(ImGuiCol_Border, v4(0, 0, 0, 0));
-	if (n)
-		igPushStyleColor_Vec4(ImGuiCol_Text, colv(C_BAD));
-	if (igButton(label, v2(0, 0)) && n)
-		problems_folded = !problems_folded;
-	if (n)
-		igPopStyleColor(1);
-	igPopStyleColor(2);
+	const struct problems *ps = D.open && D.root ? problems_now() : NULL;
+	int errors = ps ? ps->errors : n;
+	char label[80];
+	snprintf(label, sizeof label, "%s  Problems  %d###problems", open && panel_tab == 0 ? "\xE2\x96\xBE" : "\xE2\x96\xB4", n);
+	if (tab_button(label, open && panel_tab == 0, col(errors ? C_BAD : n ? C_WARN : C_TEXT))) {
+		if (open && panel_tab == 0)
+			problems_folded = true;
+		else {
+			problems_folded = false;
+			panel_tab = 0;
+		}
+	}
+	igSameLine(0, S(6));
+	snprintf(label, sizeof label, "%s  Game log###log", open && panel_tab == 1 ? "\xE2\x96\xBE" : "\xE2\x96\xB4");
+	if (tab_button(label, open && panel_tab == 1, col(C_TEXT))) {
+		if (open && panel_tab == 1)
+			problems_folded = true;
+		else {
+			problems_folded = false;
+			panel_tab = 1;
+		}
+	}
+	if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+		igSetTooltip("The lines the game writes for this mod (logs/rqmod.log in the game's folder), as they come");
+	if (open && panel_tab == 1) {
+		igSameLine(0, S(14));
+		igCheckbox("Every line, not only this mod's", &log_all);
+	}
 	const char *msg;
 	ImVec4_c mc;
+	char buf[160];
 	if (!D.open) {
 		msg = "";
 		mc = colv(C_FAINT);
-	} else if (n) {
-		msg = D.root ? "The file reads, but this editor does not write it" : "RQ MOD cannot read this file";
-		mc = colv(D.root ? C_WARN : C_BAD);
+	} else if (!D.root) {
+		msg = "RQ MOD cannot read this file";
+		mc = colv(C_BAD);
+	} else if (ps->errors) {
+		snprintf(buf, sizeof buf, "RQ MOD does not play this file: %d problem%s", ps->errors, ps->errors == 1 ? "" : "s");
+		msg = buf;
+		mc = colv(C_BAD);
+	} else if (ps->warnings) {
+		snprintf(buf, sizeof buf, "RQ MOD plays this file, with %d warning%s", ps->warnings, ps->warnings == 1 ? "" : "s");
+		msg = buf;
+		mc = colv(C_WARN);
 	} else {
-		msg = "\xE2\x9C\x93 The file reads as RQ MOD reads it";
+		msg = "\xE2\x9C\x93 RQ MOD plays this file: no problem found";
 		mc = colv(C_OK);
 	}
 	float mw = igCalcTextSize(msg, NULL, false, -1).x;
@@ -2287,13 +2597,13 @@ static void bottom_panel(float tabs_h, float panel_h)
 
 	if (open) {
 		igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, v2(S(12), S(6)));
-		igBeginChild_Str("##problems", v2(0, panel_h), ImGuiChildFlags_AlwaysUseWindowPadding, 0);
-		igPopStyleVar(1);
-		igTextColored(colv(D.root ? C_WARN : C_BAD), "\xE2\x97\x8F");
-		igSameLine(0, S(8));
-		igPushTextWrapPos(0);
-		igText("%s: %s", D.rel, D.why);
-		igPopTextWrapPos();
+		igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, v2(S(8), 0));
+		igBeginChild_Str(panel_tab == 1 ? "##log" : "##problems", v2(0, panel_h), ImGuiChildFlags_AlwaysUseWindowPadding, 0);
+		igPopStyleVar(2);
+		if (panel_tab == 1)
+			log_list();
+		else
+			problems_list();
 		igEndChild();
 	}
 }
@@ -2616,6 +2926,47 @@ bool ui_do(const char *action)
 		           : !strcmp(arg, "changed") ? M_CHANGED : !strcmp(arg, "new") ? M_NEW : M_NONE;
 	else if (!strcmp(name, "fold"))
 		problems_folded = !problems_folded;
+	else if (!strcmp(name, "panel")) {   /* panel=problems|log: the bottom panel open on that tab */
+		problems_folded = false;
+		panel_tab = !strcmp(arg, "log") ? 1 : 0;
+		log_all = !strcmp(arg, "logall");
+		if (log_all)
+			panel_tab = 1;
+	} else if (!strcmp(name, "logfile")) {   /* another file as the game's log, read at once */
+		log_override = true;
+		gamelog_set_file(arg);
+		gamelog_poll(0, true);
+		return gamelog_exists();
+	} else if (!strcmp(name, "printlog")) {   /* the log's lines the panel shows, on stdout */
+		gamelog_poll(0, true);
+		const struct mod *m = mod_now();
+		printf("log %s\n", gamelog_exists() ? "read" : "none");
+		for (int i = 0; i < gamelog_count(); i++)
+			if (gamelog_for(gamelog_line(i), log_all || !m ? NULL : m->id))
+				printf("| %s\n", gamelog_line(i));
+		fflush(stdout);
+	} else if (!strcmp(name, "printproblems")) {   /* the open file's problems, on stdout */
+		if (D.open && !D.root) {
+			printf("problems 1 0\nerror - | - | %s\n", D.why);
+			fflush(stdout);
+			return true;
+		}
+		const struct problems *ps = problems_now();
+		printf("problems %d %d\n", ps->errors, ps->warnings);
+		for (int i = 0; i < ps->n; i++)
+			printf("%s %s | %s | %s\n", ps->p[i].level == PROB_ERROR ? "error" : "warning", ps->p[i].place[0] ? ps->p[i].place : "-",
+			       ps->p[i].at[0] ? ps->p[i].at : "-", ps->p[i].msg);
+		fflush(stdout);
+	} else if (!strcmp(name, "loglink")) {   /* loglink=N: the log tab's Nth line clicked (one that names a place) */
+		gamelog_poll(0, true);
+		return log_click(atoi(arg));
+	} else if (!strcmp(name, "goproblem")) {   /* goproblem=N: the Nth problem clicked */
+		const struct problems *ps = problems_now();
+		int i = atoi(arg);
+		if (i < 0 || i >= ps->n)
+			return false;
+		go_to_problem(ps->p[i].place);
+	}
 	else if (!strcmp(name, "page"))
 		fields_page = atoi(arg);
 	else if (!strcmp(name, "json"))
@@ -2703,6 +3054,9 @@ void ui_frame(void)
 	nlabels = 0;
 	if (D.root)
 		collect_labels(doc_steps(), "steps");
+	if (!log_override)
+		gamelog_set_game(game_dir);
+	gamelog_poll(igGetTime(), false);
 
 	igSetNextWindowPos(v2(0, 0), ImGuiCond_Always, v2(0, 0));
 	igSetNextWindowSize(io->DisplaySize, ImGuiCond_Always);
@@ -2721,7 +3075,7 @@ void ui_frame(void)
 
 	float top_h = S(54), tabs_h = S(38), status_h = S(28);
 	int n = problem_count();
-	float panel_h = n > 0 && !problems_folded ? S(110) : 0;
+	float panel_h = panel_open(n) ? S(160) : 0;
 	float body_h = io->DisplaySize.y - top_h - tabs_h - status_h - panel_h;
 	float left_w = S(260), right_w = S(480);
 	float mid_w = io->DisplaySize.x - left_w - right_w;
@@ -2747,7 +3101,7 @@ void ui_frame(void)
 	ImDrawList_AddLine(dl, v2(body.x + left_w, body.y), v2(body.x + left_w, body.y + body_h), col(C_LINE), S(1));
 	ImDrawList_AddLine(dl, v2(body.x + left_w + mid_w, body.y), v2(body.x + left_w + mid_w, body.y + body_h), col(C_LINE), S(1));
 
-	igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, v2(S(8), S(6)));
+	igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, v2(S(8), 0));   /* the panel right under its tabs */
 	bottom_panel(tabs_h, panel_h);
 	igPopStyleVar(1);
 	igSetCursorScreenPos(v2(0, io->DisplaySize.y - status_h));

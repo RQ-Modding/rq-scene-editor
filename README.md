@@ -7,7 +7,7 @@ A scene file is a mod's scene as JSON: the cast, then the steps the game plays (
 music, choices, branches). A mod plays one with `rq.scene.file`. The editor lists a mod's scene
 files, shows each file's steps as a list with its branches as a tree, and writes the file back.
 
-**State: 0.6.0, not released.** What it does so far:
+**State: 0.7.0, not released.** What it does so far:
 
 - it finds the game folder and lists the game's mods, or opens a mod's folder from anywhere;
 - it lists the mod's scene files, with a line count and why a file cannot be read;
@@ -36,10 +36,16 @@ files, shows each file's steps as a list with its branches as a tree, and writes
 - it edits the cast: faces, name plates, renaming an entry with the lines that use it;
 - it has undo and redo, and it notices when a file changes on disk;
 - it reads each file as RQ MOD reads it, so a file the game refuses shows the game's own message;
+- it checks the file with RQ MOD's own checker, the one the game runs before it plays a scene,
+  and lists the problems with the game's own words, each marked on its step; it also warns of
+  what the game's message box cannot show: a letter its font does not have, a page of more lines
+  than the box holds, a `{name}` no step sets;
+- it shows the game's log for the mod, the lines as the game writes them;
 - it has two looks, Copandon (dark, the default) and Parchment (light).
 
-Still to come: RQ MOD's own checks on the file in a list of problems; and Play in the game, which starts the scene in the running game. It will
-ship in RQ MOD's package, as Rance Browser does.
+Still to come: Play in the game, which starts the scene in the running game, and the checks that
+need the game running (the mod's functions and its own ids). It will ship in RQ MOD's package, as
+Rance Browser does.
 
 It is a fan project. AliceSoft and MangaGamer do not make or endorse it, and it contains nothing of
 their games.
@@ -99,6 +105,19 @@ name at the bottom to pick another.
   to it with it, unless another label had the old name too.
 - **Cast and file:** the cast, each entry with its face, its name plate and the lines that use it,
   and the file's own fields (Plays once, the format, the schema).
+- **Problems:** the panel at the bottom, folded to its tabs while the file has none. It runs RQ
+  MOD's own checker on the file as it is typed, so its problems are the ones the game would give
+  (the game does not play a file with one), with the game's names of quests, characters and items.
+  The editor adds warnings of its own, from the game's message box: a letter the game's font does
+  not have, a page longer than the box (the rest is cut off), and a `{name}` that no step sets
+  (the game shows it as written unless the mod gives it). Click a problem to go to its step, row
+  or cast entry; the list marks the step with the problem under it, and the fields list it under
+  their heading. The scenes list gives each file's count of problems or warnings. The mod's
+  functions and a mod's own ids are checked when the game runs (not yet).
+- **Game log:** the lines the game writes in its `logs\rqmod.log` for the open mod (its own lines,
+  and RQ MOD's lines that name it), read as they come; **Every line** shows them all. A line that
+  names a place of one of the mod's scene files (`scenes/meeting.json: steps[3]: ...`) opens that
+  file at that step when clicked.
 - **Keys:** Ctrl+S saves, Ctrl+Z undoes, Ctrl+Y (or Ctrl+Shift+Z) redoes, Up and Down move through the
   steps, Alt+Up and Alt+Down move a step, Ctrl+D copies it and Delete removes it.
 
@@ -138,7 +157,12 @@ rq-scene-editor --mixer-check [--game DIR]
 
 - `--check` reads every scene file of a folder (or of the game's mods) as RQ MOD reads it, writes
   it in the editor's layout, reads that back, and prints a JSON report. A file passes when it reads
-  back to the same values and a second write gives the same text. Exit 1 when one does not.
+  back to the same values and a second write gives the same text. Exit 1 when one does not. The
+  report also gives each file's `problems` from RQ MOD's checker, as the game writes them after the
+  file's path (`in_mod`), its `warnings` (the `{name}`s no step sets; the font's and the box's need
+  the window), and how many files RQ MOD does not play (`with_problems`). With `--game` it checks
+  the game's names of quests, characters and items, with `--dir` too; a picture is looked for in
+  the mod's folder, the nearest folder above the file with a `mod.json`.
 - `--format` writes the files in the editor's layout.
 - `--shot` draws the window without showing it and saves it. `--do` presses the window's buttons
   first: `select=PLACE`, `add=KIND`, `apply=JSON`, `copy`, `delete`, `up`, `down`, `undo`,
@@ -162,6 +186,10 @@ rq-scene-editor --mixer-check [--game DIR]
   `1` for the second check of the top group, `1.0` for the first check in that one's group.
   `does=on|steps|goto:LABEL|end:VALUE` sets what the selected row does, `label=NAME` renames the
   selected label with its go-tos, and `printfile` prints the whole file as the editor writes it.
+  The bottom panel: `panel=problems|log|logall` opens it on that tab (`logall` with every line),
+  `printproblems` prints the open file's problems, `goproblem=N` clicks the Nth one,
+  `logfile=PATH` reads another file as the game's log, `printlog` prints the lines the log tab
+  shows and `loglink=N` clicks its Nth line.
   `frame` draws a frame before the actions after it, so a run can go through a scene; the shot
   waits a few frames after the last actions.
 - `--mixer-check` mixes Play from here's sounds without a sound device and checks them: two sounds
@@ -198,6 +226,11 @@ fixed, install 3.2.0:
 The editor reads the game through [Rance Browser](https://github.com/RQ-Modding/rance-browser)'s
 readers, the static library `rance_core`, which comes with Dear ImGui (cimgui), SDL2 and libsys4. Both
 are submodules in `subprojects/`. Inside RQ MOD, meson shares one copy of each with the engine.
+
+It checks a file with RQ MOD's own scene checker, a Lua file built into the program and run in Lua
+5.4 (`third_party/lua`, linked in). Inside RQ MOD, the engine passes its own `src/lua/scene_check.lua`
+with the meson option `scene_check_lua`, so the editor and the game check with one file; built alone,
+the editor takes `data/scene_check.lua`, a copy of it kept the same.
 
 The window uses Windows' own fonts: Segoe UI, Consolas for the JSON, Yu Gothic for Japanese text.
 The stage and the lines in the list use the game's own font, read from the game folder; the stage's

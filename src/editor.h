@@ -424,6 +424,57 @@ bool place_list(const char *place, char *list_place, size_t n, int *index);   /*
 /* Every step of a list and of the lists under it, in order, with its place. */
 void steps_each(cJSON *list, const char *lp, void (*fn)(cJSON *st, const char *place, void *ud), void *ud);
 
+/* ---- problems (problems.c) ---- */
+
+/* PROB_ERROR: RQ MOD's checker refuses the file (it does not play); PROB_WARN: the editor's, from the
+ * game's box (the game plays it, not as it was meant to look). */
+enum { PROB_ERROR, PROB_WARN };
+
+struct problem {
+	int level;
+	char place[256];   /* where the editor shows it: a step's or a row's place, cast.NAME, or "" */
+	char at[256];      /* the place as the check names it (steps[2].choice[0].if.gold), or "" */
+	char msg[600];     /* what is wrong */
+};
+
+struct problems {
+	struct problem *p;
+	int n, cap;
+	int errors, warnings;
+};
+
+/* The box's rules (lines and letters) need the game's font measured: the window sets it. */
+extern bool problems_box;
+/* RQ MOD's checks and the editor's on a file's JSON, into *ps (emptied first). mod_dir: where a
+ * picture's file is looked for, or NULL. */
+void problems_check(const cJSON *root, const char *mod_dir, struct problems *ps);
+void problems_free(struct problems *ps);
+/* The open file's, checked again when it changes (in a frame). */
+const struct problems *problems_now(void);
+void problems_forget(void);
+/* The open file's problems at a place (a step's or a row's): how many, and the first. */
+int problems_at(const char *place, const struct problem **first);
+/* The place the editor shows for a checker's place: steps[2].choice[0].if.gold -> steps[2].choice[0]. */
+void problem_place(const char *at, char *out, size_t n);
+/* A file of the list, from disk, counted once each time it changes. */
+void problems_count_file(const char *path, const char *mod_dir, long long mtime, long long size, int *errors, int *warnings);
+/* A game name as the loader finds it: its number; 0 and why when there is none; -1 when it cannot
+ * be known here (no names, or a mod's own id). */
+int problems_find_id(const char *kind, const char *name, char *why, size_t n);
+const char *problems_lua_why(void);   /* why RQ MOD's checker did not load, or NULL */
+
+/* ---- the game's log (gamelog.c) ---- */
+
+void gamelog_set_game(const char *game_dir);   /* its logs/rqmod.log */
+void gamelog_set_file(const char *path);       /* another file (--do logfile=PATH) */
+void gamelog_poll(double now, bool force);     /* reads what the game added (twice a second) */
+const char *gamelog_path(void);
+bool gamelog_exists(void);
+int gamelog_count(void);
+const char *gamelog_line(int i);
+unsigned gamelog_gen(void);                    /* changes when lines come or the log starts again */
+bool gamelog_for(const char *line, const char *mod);   /* a line of that mod */
+
 /* ---- the window (ui.c) ---- */
 
 struct ui {

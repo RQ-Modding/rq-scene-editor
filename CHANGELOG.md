@@ -2,6 +2,37 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 0.7.0 (not released)
+
+Problems: RQ MOD's own checker in the editor, the game's message box, the game's log.
+
+- **RQ MOD's checker runs in the editor.** The editor runs RQ MOD's own scene checker, the Lua file
+  the game runs before it plays a scene file, in a Lua 5.4 of its own, on the file as it is typed.
+  So the editor and the game do not disagree: a problem here is one the game gives, in its words,
+  and a file with none is one the game plays. The game's names of quests, characters and items
+  come from RQ MOD's names; a picture is looked for in the mod's folder. The mod's functions and a
+  mod's own ids need the game running and are not checked yet.
+- **The game's message box.** Warnings of the editor's own: a letter the game's font does not have
+  (the game cannot show it), a page of more lines than the box shows (the rest is cut off) and a
+  `{name}` that no step sets with a choice's or a call's `into` (the game shows it as written
+  unless the mod gives it), in a line, a name plate or a row's text and comment.
+- **The Problems panel** at the bottom lists them, unfolded when a problem comes; a click goes to
+  the step, the row or the cast entry. The list marks a step with its first problem under it and a
+  mark at its left, a row with its problem as its hint, a cast entry in the problem's colour; the
+  fields list the place's problems under their heading. The scenes list gives each file's problems
+  or warnings in place of its line count. The tab row says whether RQ MOD plays the file.
+- **The game's log.** A second tab shows the lines the game writes in `logs\rqmod.log` for the open
+  mod, read as they come (a new log when the game starts again); **Every line** shows the others
+  too. A line naming a place of the mod's scene files opens that file at that step.
+- **`--check`** gives each file's `problems` and `warnings` and the number of files RQ MOD does not
+  play; with `--game` it checks the game's names, also with `--dir`, and it finds the mod's folder
+  for the pictures (the nearest folder above with a `mod.json`).
+- **For checks and agents,** `--do panel=problems|log|logall`, `printproblems`, `goproblem=N`,
+  `logfile=PATH`, `printlog` and `loglink=N`. `--selftest` tries the checker's places and the
+  editor's warnings, and a failed run keeps the lines before it.
+- The face of a line whose speaker is not in the cast no longer stops the window (a drawing call
+  with its last two values in the old order).
+
 ## 0.6.0 (not released)
 
 Branches: a choice's rows, conditions built from checks, labels and go-tos.

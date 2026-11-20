@@ -48,6 +48,8 @@ static void usage(void)
 	       "  " APP_EXE " --check [--dir DIR | --game DIR [--mod ID]] [--out FILE]\n"
 	       "      each scene file read as RQ MOD reads it, written in the editor's layout and read\n"
 	       "      again: the same values, the same text twice. Exit 1 when one does not round-trip.\n"
+	       "      Each file's problems from RQ MOD's own checker (the game's names with --game) and\n"
+	       "      the editor's warnings that need no font.\n"
 	       "  " APP_EXE " --format FILE...\n"
 	       "      the files written in the editor's layout\n"
 	       "  " APP_EXE " --shot FILE.png --game DIR [--mod ID | --mod-dir DIR] [--file REL]\n"
@@ -60,7 +62,10 @@ static void usage(void)
 	       "      plays, on stdout); the branches: cond=OP:PATH[:ARG] (the selected if's or row's\n"
 	       "      condition: add, group, del, not, kind, mode, value), does=on|steps|goto:LABEL|\n"
 	       "      end:VALUE (the selected row), label=NAME (its go-tos with it), printstep,\n"
-	       "      printfile; frame: the actions after it wait for a frame drawn\n"
+	       "      printfile; the bottom panel: panel=problems|log|logall, printproblems,\n"
+	       "      goproblem=N (the Nth problem clicked), logfile=PATH (another file as the game's log),\n"
+	       "      printlog, loglink=N (the log's Nth line clicked); frame: the actions after it wait\n"
+	       "      for a frame drawn\n"
 	       "  " APP_EXE " --selftest FILE\n"
 	       "      edits, undo, saving and changes on disk, tried on FILE (a copy: it is written)\n"
 	       "  " APP_EXE " --mixer-check [--game DIR]\n"
@@ -295,9 +300,13 @@ int main(int argc, char **argv)
 		return run_format(argc, argv, A.format_at);
 	char dir[1024] = "";
 	if (A.check) {
+		/* The game's names for the checker: with --dir only when --game names the game. */
+		bool have_game = (!A.dir || A.game) && find_game(dir, sizeof dir);
+		if (have_game && !game_open(dir))
+			fprintf(stderr, APP_EXE ": the game's names are not checked: %s\n", G.errors);
 		if (A.dir)
 			return run_check(A.dir, NULL, NULL, A.out);
-		if (!find_game(dir, sizeof dir)) {
+		if (!have_game) {
 			fprintf(stderr, APP_EXE ": no game folder (use --game DIR or --dir DIR)\n");
 			return 1;
 		}
@@ -386,6 +395,7 @@ int main(int argc, char **argv)
 	int look = A.look >= 0 ? A.look : A.shot_path ? LOOK_COPANDON : look_find(settings_get("look"));
 	look_apply(look < 0 ? LOOK_COPANDON : look);
 	fonts_load(G.font);
+	problems_box = true;   /* the box's rules need the fonts: the window checks them, --check does not */
 	ImGui_ImplSDL2_InitForOpenGL(g_window, gl);
 	ImGui_ImplOpenGL3_Init("#version 130");
 
