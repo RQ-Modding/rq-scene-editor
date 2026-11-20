@@ -24,7 +24,7 @@ editor_version = meson.project_version()
 build_note = get_option('build_note')
 
 lua_lib = static_library('lua54', 'third_party/lua/onelua.c',
-    c_args : ['-DMAKE_LIB', '-Wno-unused-parameter', '-Wno-implicit-fallthrough', '-Wno-stringop-overflow', '-Wno-array-bounds'],
+    c_args : ['-DMAKE_LIB', '-Wno-unused-parameter', '-Wno-implicit-fallthrough', '-Wno-stringop-overflow', '-Wno-array-bounds', '-Wno-restrict'],
     include_directories : include_directories('third_party/lua'))
 lua_dep = declare_dependency(link_with : lua_lib, include_directories : include_directories('third_party/lua'))
 
