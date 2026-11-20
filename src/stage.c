@@ -119,6 +119,7 @@ void stage_start(struct stage *s, const cJSON *root)
 	memset(s, 0, sizeof *s);
 	s->cast = get(root, "cast");
 	s->speed = -1;
+	s->choice_row = -1;
 }
 
 static bool take(const char **p, const char *word, int *num)
@@ -168,7 +169,21 @@ static void walk(const cJSON *root, const char *place, struct stage *s, bool wit
 			next = get(st, "then");
 		else if (take(&p, ".else[", &k))
 			next = get(st, "else");
-		else if (take(&p, ".choice[", &r) && take(&p, ".steps[", &k)) {
+		else if (take(&p, ".choice[", &r)) {
+			if (!*p) {
+				/* A choice's row: the choice on show, that row under the cursor. */
+				if (with_step) {
+					stage_apply(s, st);
+					const char *kind = step_kind(st);
+					if (kind && !strcmp(kind, "choice")) {
+						s->choice = st;
+						s->choice_row = r;
+					}
+				}
+				return;
+			}
+			if (!take(&p, ".steps[", &k))
+				return;
 			const cJSON *rows = get(st, "choice");
 			next = get(cJSON_IsArray(rows) ? cJSON_GetArrayItem(rows, r) : NULL, "steps");
 		}
@@ -695,7 +710,20 @@ int stage_menu_hit(float gx, float gy)
 	return -1;
 }
 
-static void menu(const struct pen *P, const cJSON *choice)
+/* A row with a condition: "if" at the right end of its button, in the window's own letters (not the
+ * game's: the game shows the row or not). */
+static void if_mark(const struct pen *P, float right, float mid)
+{
+	float size = S(11) > 9 ? S(11) : 9, pad = S(3);
+	float tw = ImFont_CalcTextSizeA(F_BOLD, size, FLT_MAX, 0, "if", NULL, NULL).x;
+	V2 c = at(P, right, mid);
+	V2 a = v2(c.x - tw - 2 * pad - S(4), c.y - size / 2 - pad + S(0.5f)), b = v2(c.x - S(4), c.y + size / 2 + pad);
+	ImDrawList_AddRectFilled(P->dl, a, b, IM_COL32(14, 30, 24, 200), S(3), 0);
+	ImDrawList_AddRect(P->dl, a, b, IM_COL32(201, 232, 176, 255), S(3), S(1), 0);
+	ImDrawList_AddText_FontPtr(P->dl, F_BOLD, size, v2(a.x + pad, a.y + pad - S(0.5f)), IM_COL32(201, 232, 176, 255), "if", NULL, 0, NULL);
+}
+
+static void menu(const struct pen *P, const cJSON *choice, int hover)
 {
 	hits.n = 0;
 	const cJSON *rows = get(choice, "choice");
@@ -755,7 +783,7 @@ static void menu(const struct pen *P, const cJSON *choice)
 			at_y += 7;
 			continue;
 		}
-		pic_part(P, btn, 0, 0, 340, (float)bh, (float)(x + 18), (float)(y + at_y));
+		pic_part(P, btn, i == hover ? 340 : 0, 0, 340, (float)bh, (float)(x + 18), (float)(y + at_y));
 		if (hits.n < 64) {
 			hits.row[hits.n] = i;
 			hits.x[hits.n] = (float)(x + 18);
@@ -778,6 +806,8 @@ static void menu(const struct pen *P, const cJSON *choice)
 		float w = text_width(ts, 0, text);
 		float th = ts * GAME_SIZE_K;
 		game_text(P, ts, 0, false, x + 18 + (340 - w) / 2, y + at_y + (bh - th) / 2, IM_COL32(cr, cg, cb, 255), text);
+		if (cJSON_IsObject(r) && get(r, "if"))
+			if_mark(P, (float)(x + 18 + 340), (float)(y + at_y) + bh / 2.0f);
 		at_y += bh;
 	}
 }
@@ -807,7 +837,7 @@ void stage_paint(ImDrawList *dl, V2 o, float k, const struct stage *s, int page)
 
 	message(&P, s, page);
 	if (s->choice)
-		menu(&P, s->choice);
+		menu(&P, s->choice, s->choice_row);
 	if (s->m.white > 0)
 		ImDrawList_AddRectFilled(dl, o, end, rgba(255, 255, 255, s->m.white > 1 ? 1 : s->m.white), 0, 0);
 	ImDrawList_PopClipRect(dl);

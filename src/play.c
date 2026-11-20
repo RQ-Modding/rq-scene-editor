@@ -521,6 +521,7 @@ static void play_step(const cJSON *st)
 	} else if (!strcmp(kind, "choice")) {
 		struct stage to = last();
 		to.choice = st;
+		to.choice_row = -1;
 		struct beat *b = beat(B_CHOICE, &to);
 		if (b)
 			b->step = st;

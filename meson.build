@@ -9,7 +9,7 @@
 # It reads the game through Rance Browser's readers (the rance_core library): the game folder, its
 # CGs, music and sounds, RQ MOD's names, Dear ImGui (cimgui) on SDL2 and OpenGL 3.
 project('rq-scene-editor', 'c', 'cpp',
-        version : '0.5.0',
+        version : '0.6.0',
         meson_version : '>= 0.59',
         default_options : ['c_std=c11', 'cpp_std=c++17', 'warning_level=1'])
 add_project_arguments('-D_DEFAULT_SOURCE', language : 'c')
@@ -24,7 +24,8 @@ build_note = get_option('build_note')
 executable('rq-scene-editor',
     ['src/main.c', 'src/look.c', 'src/json.c', 'src/doc.c', 'src/mods.c', 'src/ui.c',
      'src/steps.c', 'src/win.c', 'src/check.c', 'src/media.c', 'src/stage.c', 'src/fields.c',
-     'src/fx.c', 'src/play.c', 'src/worldmap.c', 'src/flash.c', 'src/mixer.c', 'src/picker.c'],
+     'src/fx.c', 'src/play.c', 'src/worldmap.c', 'src/flash.c', 'src/mixer.c', 'src/picker.c',
+     'src/cond.c'],
     c_args : c_warnings + [
               '-DEDITOR_VERSION="' + editor_version + '"',
               '-DEDITOR_BUILD_NOTE="' + build_note + '"'],

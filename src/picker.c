@@ -434,11 +434,14 @@ static const char *cast_with(int no, const char *path)
 	return NULL;
 }
 
-static cJSON *target_obj(void)
+/* Where the pick goes; a choice's row that is only a text becomes an object only to write (make). */
+static cJSON *target_obj_for(bool make)
 {
 	if (!D.root)
 		return NULL;
 	cJSON *o = P.t.place[0] ? place_find(D.root, P.t.place, NULL, NULL) : item(item(D.root, "cast"), P.t.cast);
+	if (!o && P.t.place[0])
+		o = row_object(D.root, P.t.place, make);
 	if (o && P.t.sub[0]) {
 		cJSON *s = item(o, P.t.sub);
 		if (!cJSON_IsObject(s)) {
@@ -448,6 +451,11 @@ static cJSON *target_obj(void)
 		o = s;
 	}
 	return o;
+}
+
+static cJSON *target_obj(void)
+{
+	return target_obj_for(false);
 }
 
 static const char *target_words(void)
@@ -557,7 +565,7 @@ static void pick_value(char *out, size_t n, bool *is_cast)
 
 static bool apply(void)
 {
-	cJSON *o = target_obj();
+	cJSON *o = target_obj_for(true);
 	if (!o || !doc_editable())
 		return false;
 	char text[600];
@@ -630,7 +638,7 @@ static void suggest_name(void)
 /* The face goes into the cast as P.add_name, and the line names it. */
 static bool add_to_cast(void)
 {
-	cJSON *o = target_obj();
+	cJSON *o = target_obj_for(true);
 	if (!o || !doc_editable())
 		return false;
 	cJSON *cast = item(D.root, "cast");

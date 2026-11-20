@@ -76,6 +76,7 @@ bool scene_parse(const char *text, cJSON **root, char *why, size_t n);
 char *scene_write(const cJSON *root);
 /* One step in the editor's layout, as it sits in a file at indent 0 (malloc'd, no newline at the end). */
 char *step_write(const cJSON *step);
+char *row_write(const cJSON *row);   /* a choice's row, the same way */
 /* A value on one line, keys in their own order: { "a": 1 }, ["a", "b"] (malloc'd). */
 char *json_inline(const cJSON *v);
 /* The same values: objects compared by key (the layout puts keys in its own order). */
@@ -198,6 +199,7 @@ struct stage {
 	int speed;               /* the text's milliseconds a letter (speed): -1 the player's, 0 at once */
 	int music;               /* the track the steps so far put on, 0 none (not drawn) */
 	const cJSON *choice;     /* the selected step, when it is a choice */
+	int choice_row;          /* its row under the cursor (a row selected), or -1 */
 	const cJSON *cast;
 	const char *line_name;   /* a name plate given by the caller (the cast tab), or NULL */
 	/* What moves while the stage plays (play.c); all 0 while it stands still. In game pixels. */
@@ -312,6 +314,33 @@ const char *fields_cast(const char *key, bool readonly);
 int cast_uses(const char *key, char *first, size_t n);
 /* A picture value (a CG number or a mod picture) in a box, cropped to fill it; top: keep its top. */
 void draw_picture_small(ImDrawList *dl, const cJSON *v, V2 a, V2 b, bool top);
+/* A choice's row: its text, comment, condition, what it does, colour, sound and id. */
+void fields_row(cJSON *rows, int r, const char *place, bool readonly);
+/* A label step renamed, the go-tos to it with it (when its name was the only one): how many moved, or
+ * -1 and why. */
+int fields_label_rename(cJSON *st, const char *to, char *why, size_t n);
+/* For the condition builder: a field typed in, a pick (a step to undo), a text field left, a value
+ * with its type (a text, a number, true, false, null) in an object (key) or a list (index). */
+void field_typed(void);
+void field_picked(void);
+void field_left(void);
+void field_value(const char *id, cJSON *parent, const char *key, int index, float w);
+
+/* ---- conditions (cond.c) ---- */
+
+/* A change to a condition, at a check's path ("" the whole, "1" the second of the group at the top,
+ * "1.0" the first of that one's group): add a check to a group (arg: its kind), add a group, take a
+ * check away, turn it around (Not), change its kind (arg), a group's mode (arg: all, any, notall,
+ * none), or the check as JSON (arg). */
+enum { COND_ADD, COND_GROUP, COND_DEL, COND_NOT, COND_KIND, COND_MODE, COND_VALUE, COND_OPS };
+bool cond_apply(cJSON *owner, const char *key, bool required, const char *path, int op, const char *arg, char *why, size_t n);
+/* --do cond=OP:PATH[:ARG], OP one of add, group, del, not, kind, mode, value. */
+bool cond_do(cJSON *owner, const char *key, bool required, const char *spec, char *why, size_t n);
+/* The builder for owner[key] at the cursor (required: an if's, which keeps a check). True when it
+ * changed the condition. */
+bool cond_builder(cJSON *owner, const char *key, bool required, bool readonly);
+/* A condition in a few words, for the list: "50% chance", "not gold 100", "flag mymod:met and gold 100". */
+void cond_words(const cJSON *c, char *buf, size_t n);
 
 /* ---- the pickers (picker.c) ---- */
 
@@ -384,6 +413,13 @@ cJSON *doc_steps(void);
 /* A step's place: steps[3], steps[2].then[0], steps[2].choice[1].steps[0]. */
 cJSON *place_find(const cJSON *root, const char *place, cJSON **list, int *index);
 void place_join(char *out, size_t n, const char *list_place, int index);   /* list_place + [index] */
+/* A choice's row by its place (steps[2].choice[1]): the row, the step's list of rows and its index. */
+cJSON *row_find(const cJSON *root, const char *place, cJSON **rows, int *index);
+bool place_exists(const cJSON *root, const char *place);   /* a step's or a row's */
+bool row_step_place(const char *place, char *out, size_t n);   /* steps[2] for steps[2].choice[1] */
+/* A row as an object to write a field into: a row that is only a text becomes { "text": ... } when
+ * make, else NULL (a separator, or nothing there). */
+cJSON *row_object(cJSON *root, const char *place, bool make);
 bool place_list(const char *place, char *list_place, size_t n, int *index);   /* the reverse */
 /* Every step of a list and of the lists under it, in order, with its place. */
 void steps_each(cJSON *list, const char *lp, void (*fn)(cJSON *st, const char *place, void *ud), void *ud);
@@ -418,6 +454,8 @@ bool ui_wants_quit(void);   /* the window's close: asks first when there are uns
 bool ui_do(const char *action);
 int ui_label_count(void);           /* the open file's labels */
 const char *ui_label_name(int i);
+const char *ui_label_place(int i);
+void ui_select(const char *place);  /* a step or a choice's row selected, the list brought to it */
 const char *ui_mod_id(void);        /* the open mod's id, or "mod" */
 
 /* ---- Windows (win.c) ---- */

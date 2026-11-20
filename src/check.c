@@ -228,6 +228,66 @@ static bool write_text(const char *path, const char *text)
 	return file_write(path, (uint8_t *)text, strlen(text));
 }
 
+/* owner[key] is the JSON want (NULL: not there). */
+static bool cond_is(cJSON *owner, const char *key, const char *want)
+{
+	cJSON *w = want ? cJSON_Parse(want) : NULL;
+	cJSON *v = cJSON_GetObjectItemCaseSensitive(owner, key);
+	bool ok = want ? v && w && json_same(v, w) : !v;
+	if (!ok) {
+		char *j = v ? json_inline(v) : NULL;
+		printf("     got %s\n", j ? j : "nothing");
+		free(j);
+	}
+	cJSON_Delete(w);
+	return ok;
+}
+
+/* The condition builder's changes (cond.c), on a step and a row of their own. */
+static void cond_tests(void)
+{
+	char why[200], words[300];
+	cJSON *st = cJSON_Parse("{ \"if\": { \"gold\": 100 }, \"then\": [] }");
+	cond_apply(st, "if", true, "", COND_ADD, NULL, why, sizeof why);
+	expect(cond_is(st, "if", "{ \"all\": [ { \"gold\": 100 }, { \"gold\": 1000 } ] }"),
+	       "cond: + Check on one check: both in All of, the new one of the same kind");
+	cond_apply(st, "if", true, "1", COND_NOT, NULL, why, sizeof why);
+	cond_apply(st, "if", true, "1", COND_KIND, "seen", why, sizeof why);
+	expect(cond_is(st, "if", "{ \"all\": [ { \"gold\": 100 }, { \"not\": { \"seen\": \"\" } } ] }"),
+	       "cond: Not, then another kind: the Not stays");
+	cond_do(st, "if", true, "value:1:{ \"not\": { \"seen\": \"lab:met\" } }", why, sizeof why);
+	cond_do(st, "if", true, "mode::none", why, sizeof why);
+	expect(cond_is(st, "if", "{ \"not\": { \"any\": [ { \"gold\": 100 }, { \"not\": { \"seen\": \"lab:met\" } } ] } }"),
+	       "cond: a check as JSON, and None of as not any");
+	cond_words(cJSON_GetObjectItemCaseSensitive(st, "if"), words, sizeof words);
+	expect(!strcmp(words, "not (gold 100 or not flag lab:met)"), words);
+	cond_apply(st, "if", true, "", COND_GROUP, NULL, why, sizeof why);
+	expect(cond_is(st, "if", "{ \"not\": { \"any\": [ { \"gold\": 100 }, { \"not\": { \"seen\": \"lab:met\" } }, "
+	                         "{ \"all\": [ { \"seen\": \"\" } ] } ] } }"),
+	       "cond: + Group in an Any of: an All of, its check of the last check's kind");
+	cond_apply(st, "if", true, "2.0", COND_DEL, NULL, why, sizeof why);
+	expect(cond_is(st, "if", "{ \"not\": { \"any\": [ { \"gold\": 100 }, { \"not\": { \"seen\": \"lab:met\" } } ] } }"),
+	       "cond: a group's last check taken away: the group with it");
+	cond_apply(st, "if", true, "0", COND_DEL, NULL, why, sizeof why);
+	expect(cond_is(st, "if", "{ \"seen\": \"lab:met\" }"), "cond: one check left at the top stands alone (None of x: not x)");
+	bool del = cond_apply(st, "if", true, "", COND_DEL, NULL, why, sizeof why);
+	expect(!del && why[0] && cond_is(st, "if", "{ \"seen\": \"lab:met\" }"), "cond: an if keeps its condition");
+	cJSON_Delete(st);
+
+	cJSON *row = cJSON_Parse("{ \"text\": \"Leave\" }");
+	cond_do(row, "if", false, "add::chance", why, sizeof why);
+	expect(cond_is(row, "if", "{ \"chance\": 50 }"), "cond: a row's first check");
+	cond_do(row, "if", false, "value::{ \"recruited\": \"KAORU_QUINCY\" }", why, sizeof why);
+	cond_do(row, "if", false, "kind::in_party", why, sizeof why);
+	expect(cond_is(row, "if", "{ \"in_party\": \"KAORU_QUINCY\" }"), "cond: Recruited to In the party keeps the character");
+	cond_do(row, "if", false, "add:", why, sizeof why);
+	cond_do(row, "if", false, "del:0", why, sizeof why);
+	expect(cond_is(row, "if", "{ \"in_party\": \"\" }"), "cond: the first of two taken away: the other alone");
+	cond_do(row, "if", false, "del:", why, sizeof why);
+	expect(cond_is(row, "if", NULL), "cond: a row's condition taken away: shown always");
+	cJSON_Delete(row);
+}
+
 static int nsteps(void)
 {
 	return doc_steps() ? cJSON_GetArraySize(doc_steps()) : -1;
@@ -357,6 +417,8 @@ int run_selftest(const char *path)
 		undos++;
 	expect(D.nsnaps == UNDO_DEPTH && undos == UNDO_DEPTH - 1, "a few hundred steps to undo, the oldest dropped");
 	expect(doc_dirty(), "the saved state dropped from the undo: still unsaved");
+
+	cond_tests();
 
 	/* A newer format: read-only. */
 	write_text(path, "{ \"format\": 2, \"steps\": [] }\n");

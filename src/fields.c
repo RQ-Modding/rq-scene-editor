@@ -37,9 +37,14 @@ void fields_frame(void)
 		doc_settle();
 }
 
+/* A choice's row that is only a text is shown as an object; a change to it is put in the file
+ * once its fields are drawn (fields_row), so a pick's step to undo waits for that. */
+static bool defer_pick, pending_pick, touched;
+
 /* A change from a text field: the file follows as it is typed. */
 static void typed(void)
 {
+	touched = true;
 	if (!D.live) {
 		D.live = true;
 		snprintf(D.live_place, sizeof D.live_place, "%s", cur_place);
@@ -50,6 +55,11 @@ static void typed(void)
 /* A change from a checkbox, a list or a button: a step to undo now. */
 static void picked(void)
 {
+	touched = true;
+	if (defer_pick) {
+		pending_pick = true;
+		return;
+	}
 	doc_settle();
 	doc_changed(cur_place);
 }
@@ -447,6 +457,15 @@ static void value_edit(const char *id, cJSON *parent, const char *key, int index
 		after_text_item();
 	}
 	igPopID();
+}
+
+/* For the condition builder (cond.c). */
+void field_typed(void) { typed(); }
+void field_picked(void) { picked(); }
+void field_left(void) { after_text_item(); }
+void field_value(const char *id, cJSON *parent, const char *key, int index, float w)
+{
+	value_edit(id, parent, key, index, w);
 }
 
 /* args: values in order, each with a remove button, and + Value. */
@@ -1008,6 +1027,386 @@ static void sound_field(cJSON *st, const char *kind, int what)
 
 static const char *const end_values[] = { "clear", "fail", "abandon", "escape" };
 
+/* ---- labels and go-tos ---- */
+
+struct label_count { const char *name; int n; };
+
+static void label_count_step(cJSON *st, const char *place, void *ud)
+{
+	(void)place;
+	struct label_count *c = ud;
+	const char *kind = step_kind(st);
+	cJSON *v = kind && !strcmp(kind, "label") ? item(st, "label") : NULL;
+	if (cJSON_IsString(v) && !strcmp(v->valuestring, c->name))
+		c->n++;
+}
+
+/* The file's labels of that name, counted in the file (the list's are the last frame's). */
+static int label_count(const char *name)
+{
+	struct label_count c = { name, 0 };
+	steps_each(doc_steps(), "steps", label_count_step, &c);
+	return c.n;
+}
+
+static bool label_ok(const cJSON *v)
+{
+	return cJSON_IsString(v) && label_count(v->valuestring) > 0;
+}
+
+/* A label of the file in a list, each with its place. */
+static void label_combo(const char *id, cJSON *o, const char *k, float w)
+{
+	cJSON *v = item(o, k);
+	igSetNextItemWidth(w);
+	igBeginDisabled(ro);
+	if (igBeginCombo(id, cJSON_IsString(v) ? v->valuestring : "", ImGuiComboFlags_HeightLarge)) {
+		for (int i = 0; i < ui_label_count(); i++) {
+			const char *n = ui_label_name(i);
+			char label[400];
+			snprintf(label, sizeof label, "%s##l%d", n, i);
+			V2 p = igGetCursorScreenPos();
+			if (igSelectable_Bool(label, cJSON_IsString(v) && !strcmp(n, v->valuestring), 0, v2(0, 0))) {
+				put(o, k, cJSON_CreateString(n));
+				picked();
+			}
+			float nw = igCalcTextSize(n, NULL, true, 0).x;
+			ImDrawList_AddText_FontPtr(igGetWindowDrawList(), F_MONO, fs(13), v2(p.x + nw + S(14), p.y + S(2)), col(C_FAINT), ui_label_place(i), NULL, 0, NULL);
+		}
+		if (!ui_label_count())
+			igTextColored(colv(C_FAINT), "No label in this file yet");
+		igEndCombo();
+	}
+	igEndDisabled();
+}
+
+/* Each go-to (a step's, a choice row's) to a label, changed to another name when to is not NULL. */
+struct retarget { const char *from, *to; int n; };
+
+static void retarget_step(cJSON *st, const char *place, void *ud)
+{
+	(void)place;
+	struct retarget *r = ud;
+	const char *kind = step_kind(st);
+	if (!kind)
+		return;
+	cJSON *targets[256];
+	int nt = 0;
+	if (!strcmp(kind, "goto"))
+		targets[nt++] = st;
+	cJSON *rows = !strcmp(kind, "choice") ? item(st, "choice") : NULL;
+	for (cJSON *row = cJSON_IsArray(rows) ? rows->child : NULL; row && nt < 256; row = row->next)
+		if (cJSON_IsObject(row))
+			targets[nt++] = row;
+	for (int i = 0; i < nt; i++) {
+		cJSON *g = item(targets[i], "goto");
+		if (!cJSON_IsString(g) || strcmp(g->valuestring, r->from))
+			continue;
+		r->n++;
+		if (r->to)
+			put(targets[i], "goto", cJSON_CreateString(r->to));
+	}
+}
+
+static int retarget(const char *from, const char *to)
+{
+	struct retarget r = { from, to, 0 };
+	steps_each(doc_steps(), "steps", retarget_step, &r);
+	return r.n;
+}
+
+int fields_label_rename(cJSON *st, const char *to, char *why, size_t n)
+{
+	cJSON *v = item(st, "label");
+	char old[128];
+	snprintf(old, sizeof old, "%s", cJSON_IsString(v) ? v->valuestring : "");
+	why[0] = 0;
+	if (!name_ok(to)) {
+		snprintf(why, n, "Not renamed: a name is letters, digits and _, not starting with a digit");
+		return -1;
+	}
+	if (label_count(to)) {
+		snprintf(why, n, "Not renamed: another label is named %s", to);
+		return -1;
+	}
+	int moved = old[0] && label_count(old) == 1 ? retarget(old, to) : 0;
+	put(st, "label", cJSON_CreateString(to));
+	return moved;
+}
+
+static char lab_buf[128], lab_for[300], lab_why[200];
+
+/* A label's name: renamed when the field is left, the go-tos to it with it. */
+static void label_field(cJSON *st)
+{
+	cJSON *v = item(st, "label");
+	char key[300];
+	snprintf(key, sizeof key, "%s#%d", cur_place, D.at);
+	row_label("Label", "A place a go-to (and Play from here) can start at; renamed, the go-tos follow");
+	if (strcmp(lab_for, key) && igGetActiveID() != igGetID_Str("##label")) {
+		snprintf(lab_buf, sizeof lab_buf, "%s", cJSON_IsString(v) ? v->valuestring : "");
+		snprintf(lab_for, sizeof lab_for, "%s", key);
+		lab_why[0] = 0;
+	}
+	igSetNextItemWidth(-1);
+	igPushFont(F_MONO, MONO_SIZE);
+	igInputTextWithHint("##label", "a name", lab_buf, sizeof lab_buf, ImGuiInputTextFlags_CharsNoBlank | (ro ? ImGuiInputTextFlags_ReadOnly : 0), NULL, NULL);
+	igPopFont();
+	if (igIsItemDeactivatedAfterEdit() && !(cJSON_IsString(v) && !strcmp(lab_buf, v->valuestring))) {
+		char old[128];
+		snprintf(old, sizeof old, "%s", cJSON_IsString(v) ? v->valuestring : "");
+		int moved = fields_label_rename(st, lab_buf, lab_why, sizeof lab_why);
+		if (moved >= 0) {
+			picked();
+			if (moved)
+				ui_status("Renamed the label %s to %s, and its %d go-to%s with it", old, lab_buf, moved, moved == 1 ? "" : "s");
+			else
+				ui_status("Renamed the label %s to %s", old, lab_buf);
+			snprintf(lab_for, sizeof lab_for, "%s#%d", cur_place, D.at);
+		}
+		v = item(st, "label");
+	}
+	if (lab_why[0]) {
+		bad_line(lab_why);
+	} else if (cJSON_IsString(v) && label_count(v->valuestring) > 1) {
+		bad_line("Another label has this name: a go-to would not know which");
+	} else if (cJSON_IsString(v)) {
+		int n = retarget(v->valuestring, NULL);
+		hint_line(n ? "%d go-to%s come%s here." : "No go-to comes here yet.", n, n == 1 ? "" : "s", n == 1 ? "s" : "");
+	}
+}
+
+/* ---- a choice's row ---- */
+
+static const char *const row_ways[] = { "Goes on after the choice", "Its own steps", "Goes to a label", "Ends the scene" };
+static const char *const row_way_tips[] = {
+	"The scene goes on with the step after the choice",
+	"The row's own steps play (in the list, under the row), then the scene goes on after the choice",
+	"The scene goes on at a label of this file",
+	"The scene ends here: what the play call returns; a quest's run ends with clear, fail, abandon or escape",
+};
+
+static int row_way(const cJSON *row)
+{
+	if (cJSON_GetObjectItemCaseSensitive(row, "steps"))
+		return 1;
+	if (cJSON_GetObjectItemCaseSensitive(row, "goto"))
+		return 2;
+	if (cJSON_GetObjectItemCaseSensitive(row, "end"))
+		return 3;
+	return 0;
+}
+
+static void set_way(cJSON *o, int way)
+{
+	cJSON *steps = item(o, "steps");
+	int lost = cJSON_IsArray(steps) ? cJSON_GetArraySize(steps) : 0;
+	drop(o, "steps");
+	drop(o, "goto");
+	drop(o, "end");
+	if (way == 1) {
+		cJSON_AddItemToObject(o, "steps", cJSON_CreateArray());
+	} else if (way == 2) {
+		cJSON_AddStringToObject(o, "goto", ui_label_count() ? ui_label_name(0) : "");
+	} else if (way == 3) {
+		cJSON_AddStringToObject(o, "end", "clear");
+	}
+	if (lost && way != 1)
+		ui_status("The row's %d step%s went with it: Undo brings them back", lost, lost == 1 ? "" : "s");
+}
+
+static bool only_text(const cJSON *o)
+{
+	return cJSON_IsObject(o) && o->child && !o->child->next && o->child->string && !strcmp(o->child->string, "text")
+	    && cJSON_IsString(o->child);
+}
+
+void fields_row(cJSON *rows, int r, const char *place, bool readonly)
+{
+	snprintf(cur_place, sizeof cur_place, "%s", place);
+	cur_cast[0] = 0;
+	ro = readonly;
+	cJSON *row = cJSON_GetArrayItem(rows, r);
+	if (!row)
+		return;
+	igPushID_Str(place);
+	igPushStyleVar_Vec2(ImGuiStyleVar_ItemSpacing, v2(S(8), S(7)));
+	if (cJSON_IsString(row) && !strcmp(row->valuestring, "-")) {
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_DIM), "A separator: a line between the rows of the menu, not a row to pick.");
+		igPopTextWrapPos();
+		igBeginDisabled(ro);
+		if (igButton("Make it a row", v2(0, 0))) {
+			char t[32];
+			snprintf(t, sizeof t, "Row %d", r + 1);
+			cJSON_ReplaceItemInArray(rows, r, cJSON_CreateString(t));
+			picked();
+		}
+		igEndDisabled();
+		igPopStyleVar(1);
+		igPopID();
+		return;
+	}
+	if (!cJSON_IsString(row) && !cJSON_IsObject(row)) {
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_BAD), "Not a row: a row is a text, \"-\" for a separator, or an object with \"text\". Its JSON is below.");
+		igPopTextWrapPos();
+		igPopStyleVar(1);
+		igPopID();
+		return;
+	}
+	/* A row that is only a text shows as an object, and goes back into the file as one when a field
+	 * other than its text is set. */
+	bool str = cJSON_IsString(row);
+	cJSON *o = row;
+	char *before = NULL;
+	if (str) {
+		o = cJSON_CreateObject();
+		cJSON_AddStringToObject(o, "text", row->valuestring);
+		before = json_inline(o);
+	}
+	defer_pick = str;
+	pending_pick = touched = false;
+
+	row_label("Text", "What the row says in the menu; {name} takes a variable");
+	text_field("##text", o, "text", "the row's text", false);
+	row_label("Comment", "Shown in the game's comment window while the row is under the cursor");
+	text_field("##comment", o, "comment", "none", true);
+	row_label("Shown if", "The row shows only when its condition holds; without one, always");
+	cond_builder(o, "if", false, ro);
+
+	row_label("Does", "What a pick of this row does");
+	int way = row_way(o);
+	for (int i = 0; i < 4; i++) {
+		if (i)
+			igSetCursorPosX(label_w());
+		igPushID_Int(i);
+		igBeginDisabled(ro);
+		if (igRadioButton_Bool(row_ways[i], way == i) && way != i) {
+			set_way(o, i);
+			picked();
+			way = i;
+		}
+		igEndDisabled();
+		if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+			igSetTooltip("%s", row_way_tips[i]);
+		if (i == 1 && way == 1) {
+			cJSON *steps = item(o, "steps");
+			int n = cJSON_IsArray(steps) ? cJSON_GetArraySize(steps) : 0;
+			igSameLine(0, S(8));
+			igPushFont(NULL, 14);
+			igTextColored(colv(C_FAINT), n ? "\xC2\xB7 %d step%s, under the row in the list" : "\xC2\xB7 none yet: + Add step with the row selected", n, n == 1 ? "" : "s");
+			igPopFont();
+		} else if (i == 2 && way == 2) {
+			igSameLine(0, S(8));
+			label_combo("##goto", o, "goto", -1);
+		} else if (i == 3 && way == 3) {
+			igSameLine(0, S(8));
+			value_edit("end", o, "end", 0, igGetContentRegionAvail().x);
+		}
+		igPopID();
+	}
+	if (way == 2 && !label_ok(item(o, "goto")))
+		bad_line("No label of this name in the file");
+	if (way == 3) {
+		igSetCursorPosX(label_w() + S(28));
+		igBeginDisabled(ro);
+		for (int i = 0; i < 4; i++) {
+			if (i)
+				igSameLine(0, S(6));
+			if (igSmallButton(end_values[i])) {
+				put(o, "end", cJSON_CreateString(end_values[i]));
+				picked();
+			}
+		}
+		igEndDisabled();
+	}
+
+	row_label("Colour", "The row's text in the game's menu; without one, the game's grey");
+	cJSON *cr = item(o, "r"), *cg = item(o, "g"), *cb = item(o, "b");
+	bool own = cr || cg || cb;
+	igBeginDisabled(ro);
+	if (igCheckbox("Its own##colour", &own)) {
+		if (own) {
+			put(o, "r", cJSON_CreateNumber(255));
+			put(o, "g", cJSON_CreateNumber(214));
+			put(o, "b", cJSON_CreateNumber(102));
+		} else {
+			drop(o, "r");
+			drop(o, "g");
+			drop(o, "b");
+		}
+		picked();
+	}
+	if (own) {
+		cr = item(o, "r");
+		cg = item(o, "g");
+		cb = item(o, "b");
+		float c[3] = { (cJSON_IsNumber(cr) ? (float)cr->valuedouble : 196) / 255.0f, (cJSON_IsNumber(cg) ? (float)cg->valuedouble : 196) / 255.0f,
+		               (cJSON_IsNumber(cb) ? (float)cb->valuedouble : 196) / 255.0f };
+		igSameLine(0, S(10));
+		if (igColorEdit3("##rgb", c, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_DisplayRGB)) {
+			put(o, "r", cJSON_CreateNumber(floorf(c[0] * 255 + 0.5f)));
+			put(o, "g", cJSON_CreateNumber(floorf(c[1] * 255 + 0.5f)));
+			put(o, "b", cJSON_CreateNumber(floorf(c[2] * 255 + 0.5f)));
+			typed();
+			live_id = igGetActiveID();
+		}
+		igSameLine(0, S(8));
+		igAlignTextToFramePadding();
+		igPushFont(NULL, 14);
+		igTextColored(colv(C_FAINT), "%d, %d, %d", (int)(c[0] * 255 + 0.5f), (int)(c[1] * 255 + 0.5f), (int)(c[2] * 255 + 0.5f));
+		igPopFont();
+	}
+	igEndDisabled();
+
+	row_label("Sound", "A sound of the game the row plays when it is picked; without one, the game's");
+	number_field("##sound", o, "sound", "the game's", true, S(110));
+	igSameLine(0, S(6));
+	pick_button("sound", NULL, false, SOUND_EFFECT);
+	cJSON *snd = item(o, "sound");
+	if (cJSON_IsNumber(snd) && media_can_play(SOUND_EFFECT, (int)snd->valuedouble)) {
+		igSameLine(0, S(6));
+		bool on = media_playing(SOUND_EFFECT, (int)snd->valuedouble);
+		if (igButton(on ? "\xE2\x96\xA0  Stop" : "\xE2\x96\xB6  Play", v2(0, 0)))
+			media_play(SOUND_EFFECT, (int)snd->valuedouble);
+	} else if (cJSON_IsNumber(snd)) {
+		bad_line("Not a sound of the game");
+	}
+
+	row_label("Id", "What the choice's variable gets for this row; without one, its place in the list, from 1");
+	char hint[64];
+	snprintf(hint, sizeof hint, "its place: %d", r + 1);
+	number_field("##id", o, "id", hint, true, S(110));
+
+	defer_pick = false;
+	if (str) {
+		char *after = json_inline(o);
+		if (strcmp(before, after)) {
+			if (only_text(o)) {
+				cJSON_ReplaceItemInArray(rows, r, cJSON_CreateString(item(o, "text")->valuestring));
+				cJSON_Delete(o);
+			} else {
+				cJSON_ReplaceItemInArray(rows, r, o);
+			}
+		} else {
+			cJSON_Delete(o);
+		}
+		free(after);
+		free(before);
+	} else if (touched && only_text(o)) {
+		/* Back to a text when nothing but its text is left. */
+		cJSON_ReplaceItemInArray(rows, r, cJSON_CreateString(item(o, "text")->valuestring));
+	}
+	if (pending_pick) {
+		pending_pick = false;
+		doc_settle();
+		doc_changed(cur_place);
+	}
+	igPopStyleVar(1);
+	igPopID();
+}
+
 void fields_step(cJSON *st, const char *place, bool readonly)
 {
 	snprintf(cur_place, sizeof cur_place, "%s", place);
@@ -1092,19 +1491,40 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 		bool_field("Wait for its end", st, "wait", false, NULL);
 	} else if (!strcmp(kind, "choice")) {
 		cJSON *rows = item(st, "choice");
+		row_label("Rows", "Listed here, or given by one of the mod's functions when the choice shows");
+		int from_fn = cJSON_IsArray(rows) ? 0 : 1;
+		igBeginDisabled(ro);
+		if (igRadioButton_Bool("Listed here", !from_fn) && from_fn) {
+			cJSON *l = cJSON_CreateArray();
+			cJSON_AddItemToArray(l, cJSON_CreateString("Yes"));
+			cJSON_AddItemToArray(l, cJSON_CreateString("No"));
+			put(st, "choice", l);
+			picked();
+		}
+		igSameLine(0, S(14));
+		if (igRadioButton_Bool("From the mod's function", from_fn) && !from_fn) {
+			cJSON *f = cJSON_CreateObject();
+			cJSON_AddStringToObject(f, "call", "");
+			put(st, "choice", f);
+			picked();
+		}
+		igEndDisabled();
+		rows = item(st, "choice");
 		if (cJSON_IsArray(rows)) {
 			int n = cJSON_GetArraySize(rows), r = 0;
 			for (cJSON *row = rows->child; row; row = row->next, r++) {
 				igPushID_Int(r);
 				char label[32];
 				snprintf(label, sizeof label, "Row %d", r + 1);
+				char rp[300];
+				snprintf(rp, sizeof rp, "%s.choice[%d]", cur_place, r);
 				if (cJSON_IsString(row) && !strcmp(row->valuestring, "-")) {
 					row_label(label, NULL);
 					igTextColored(colv(C_FAINT), "\xE2\x80\x94 a separator \xE2\x80\x94");
 				} else if (cJSON_IsString(row)) {
 					row_label(label, "The row's text; its place in the list goes into the choice's variable");
 					snprintf(scratch, 4096, "%s", row->valuestring);
-					igSetNextItemWidth(-S(34));
+					igSetNextItemWidth(-S(34) - S(32));
 					if (igInputText("##text", scratch, 4096, ro ? ImGuiInputTextFlags_ReadOnly : 0, NULL, NULL)) {
 						cJSON_ReplaceItemInArray(rows, r, cJSON_CreateString(scratch));
 						typed();
@@ -1112,7 +1532,7 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 					after_text_item();
 				} else if (cJSON_IsObject(row)) {
 					row_label(label, "The row's text");
-					igSetNextItemWidth(-S(34));
+					igSetNextItemWidth(-S(34) - S(32));
 					cJSON *t = item(row, "text");
 					snprintf(scratch, 4096, "%s", cJSON_IsString(t) ? t->valuestring : "");
 					if (igInputText("##text", scratch, 4096, ro ? ImGuiInputTextFlags_ReadOnly : 0, NULL, NULL)) {
@@ -1124,6 +1544,11 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 					row_label(label, NULL);
 					igTextColored(colv(C_BAD), "not a row");
 				}
+				igSameLine(0, S(6));
+				if (igButton("\xE2\x80\xBA##row", v2(S(26), 0)))
+					ui_select(rp);
+				if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+					igSetTooltip("The row's own fields: when it shows, what it does, its colour and sound");
 				igSameLine(0, S(6));
 				igBeginDisabled(ro || n <= 1);
 				bool del = igButton("\xC3\x97##del", v2(S(26), 0));
@@ -1149,10 +1574,12 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 						typed();
 					}
 					after_text_item();
-					char what[300] = "";
+					char what[400] = "", cw[200];
 					size_t o = 0;
-					if (item(row, "if"))
-						o += (size_t)snprintf(what + o, sizeof what - o, "shown when its if holds; ");
+					if (item(row, "if")) {
+						cond_words(item(row, "if"), cw, sizeof cw);
+						o += (size_t)snprintf(what + o, sizeof what - o, "shown if %s; ", cw);
+					}
 					cJSON *steps = item(row, "steps"), *go = item(row, "goto"), *end = item(row, "end");
 					if (cJSON_IsArray(steps) && o < sizeof what)
 						o += (size_t)snprintf(what + o, sizeof what - o, "plays its %d step%s (in the list)", cJSON_GetArraySize(steps),
@@ -1193,9 +1620,13 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 				picked();
 			}
 			igEndDisabled();
-			hint_line("A row's condition, go-to and end, and its colour and sound: in its JSON below for now.");
+			hint_line("\xE2\x80\xBA or the row in the list: its condition, what it does, its colour and sound.");
+		} else if (cJSON_IsObject(rows) && (!item(rows, "call") || cJSON_IsString(item(rows, "call")))) {
+			row_label("Function", "One of the mod's functions for scene files (rq.scene.functions); it returns the rows, as s.choice takes them");
+			name_field("##fn", rows, "call", "its name", false);
+			args_field(rows, "args", "The values the function gets, in order");
 		} else {
-			row_label("Rows", "Rows from the mod's function");
+			row_label("Rows from", "Rows from the mod's function");
 			json_value_field("##rows", st, "choice", "{ \"call\": \"name\" }");
 		}
 		row_label("Into", "A variable that gets the picked row's id (its place in the list from 1, or its id)");
@@ -1205,10 +1636,14 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 		igSameLine(0, S(8));
 		number_field("##y", st, "y", "y: 360", true, S(110));
 	} else if (!strcmp(kind, "if")) {
-		row_label("If", "A condition: a flag, a variable, the mod's function, or one of the game's checks");
-		json_value_field("##if", st, "if", "{ \"seen\": \"mymod:flag\" }");
-		hint_line("Its steps are under it in the list. The condition builder comes in a later version.");
-		cJSON *els = item(st, "else");
+		row_label("If", "Its then steps play when the condition holds, its else steps when it does not");
+		cond_builder(st, "if", true, ro);
+		cJSON *thn = item(st, "then"), *els = item(st, "else");
+		int nt = cJSON_IsArray(thn) ? cJSON_GetArraySize(thn) : 0, ne = cJSON_IsArray(els) ? cJSON_GetArraySize(els) : 0;
+		if (els)
+			hint_line("then: %d step%s \xC2\xB7 else: %d step%s, under it in the list", nt, nt == 1 ? "" : "s", ne, ne == 1 ? "" : "s");
+		else
+			hint_line("then: %d step%s, under it in the list; no else", nt, nt == 1 ? "" : "s");
 		igSetCursorPosX(label_w());
 		igBeginDisabled(ro);
 		if (!els) {
@@ -1224,38 +1659,11 @@ void fields_step(cJSON *st, const char *place, bool readonly)
 		}
 		igEndDisabled();
 	} else if (!strcmp(kind, "label")) {
-		row_label("Label", "A place a go-to (and Play from here) can start at; one name each in the file");
-		name_field("##label", st, "label", "a name", false);
-		cJSON *v = item(st, "label");
-		int same = 0;
-		for (int i = 0; i < ui_label_count(); i++)
-			if (cJSON_IsString(v) && !strcmp(ui_label_name(i), v->valuestring))
-				same++;
-		if (same > 1)
-			bad_line("Another label has this name: a go-to would not know which");
+		label_field(st);
 	} else if (!strcmp(kind, "goto")) {
-		cJSON *v = item(st, "goto");
 		row_label("Go to", "A label of this file");
-		igSetNextItemWidth(-1);
-		igBeginDisabled(ro);
-		if (igBeginCombo("##goto", cJSON_IsString(v) ? v->valuestring : "", ImGuiComboFlags_HeightLarge)) {
-			for (int i = 0; i < ui_label_count(); i++) {
-				const char *n = ui_label_name(i);
-				if (igSelectable_Bool(n, cJSON_IsString(v) && !strcmp(n, v->valuestring), 0, v2(0, 0))) {
-					put(st, "goto", cJSON_CreateString(n));
-					picked();
-				}
-			}
-			if (!ui_label_count())
-				igTextColored(colv(C_FAINT), "No label in this file yet");
-			igEndCombo();
-		}
-		igEndDisabled();
-		bool found = false;
-		for (int i = 0; i < ui_label_count(); i++)
-			if (cJSON_IsString(v) && !strcmp(ui_label_name(i), v->valuestring))
-				found = true;
-		if (!found)
+		label_combo("##goto", st, "goto", -1);
+		if (!label_ok(item(st, "goto")))
 			bad_line("No label of this name in the file");
 		else
 			hint_line("Double-click the step in the list to see the label.");

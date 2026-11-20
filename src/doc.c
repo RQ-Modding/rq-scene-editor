@@ -200,7 +200,7 @@ bool doc_undo(char *place, size_t n)
 	snprintf(where, sizeof where, "%s", D.snaps[D.at].place);
 	D.at--;
 	reparse();
-	if (!where[0] || !place_find(D.root, where, NULL, NULL))
+	if (!where[0] || !place_exists(D.root, where))
 		snprintf(where, sizeof where, "%s", D.snaps[D.at].place);
 	snprintf(place, n, "%s", where);
 	return true;
@@ -310,6 +310,69 @@ cJSON *place_find(const cJSON *root, const char *place, cJSON **list, int *index
 	if (index)
 		*index = k;
 	return item;
+}
+
+cJSON *row_find(const cJSON *root, const char *place, cJSON **rows, int *index)
+{
+	if (!root || !place)
+		return NULL;
+	/* The last ".choice[N]", with nothing after it. */
+	const char *c = NULL, *p = place, *q;
+	while ((q = strstr(p, ".choice["))) {
+		c = q;
+		p = q + 1;
+	}
+	if (!c)
+		return NULL;
+	const char *r = c + 8;
+	int k;
+	if (!take(&r, "", &k) || *r)
+		return NULL;
+	char head[256];
+	snprintf(head, sizeof head, "%.*s", (int)(c - place), place);
+	cJSON *st = place_find(root, head, NULL, NULL);
+	cJSON *l = cJSON_IsObject(st) ? cJSON_GetObjectItemCaseSensitive(st, "choice") : NULL;
+	cJSON *row = cJSON_IsArray(l) ? cJSON_GetArrayItem(l, k) : NULL;
+	if (!row)
+		return NULL;
+	if (rows)
+		*rows = l;
+	if (index)
+		*index = k;
+	return row;
+}
+
+bool place_exists(const cJSON *root, const char *place)
+{
+	return place_find(root, place, NULL, NULL) || row_find(root, place, NULL, NULL);
+}
+
+bool row_step_place(const char *place, char *out, size_t n)
+{
+	const char *c = NULL, *p = place, *q;
+	while ((q = strstr(p, ".choice["))) {
+		c = q;
+		p = q + 1;
+	}
+	if (!c)
+		return false;
+	snprintf(out, n, "%.*s", (int)(c - place), place);
+	return true;
+}
+
+cJSON *row_object(cJSON *root, const char *place, bool make)
+{
+	cJSON *rows;
+	int i;
+	cJSON *row = row_find(root, place, &rows, &i);
+	if (cJSON_IsObject(row))
+		return row;
+	if (!make || !cJSON_IsString(row) || !strcmp(row->valuestring, "-"))
+		return NULL;
+	cJSON *o = cJSON_CreateObject();
+	cJSON_AddStringToObject(o, "text", row->valuestring);
+	cJSON_ReplaceItemInArray(rows, i, o);
+	return o;
 }
 
 void place_join(char *out, size_t n, const char *list_place, int index)

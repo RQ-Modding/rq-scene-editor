@@ -524,6 +524,13 @@ char *step_write(const cJSON *step)
 	return done(&b);
 }
 
+char *row_write(const cJSON *row)
+{
+	struct buf b = { 0 };
+	put_item(&b, row, 0, X_ROW);
+	return done(&b);
+}
+
 char *scene_write(const cJSON *root)
 {
 	struct buf b = { 0 };

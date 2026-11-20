@@ -179,6 +179,17 @@ static cJSON *sel_step(cJSON **list, int *index)
 	return D.root && UI.sel[0] ? place_find(D.root, UI.sel, list, index) : NULL;
 }
 
+/* The selected choice's row, when a row is selected (steps[2].choice[1]). */
+static cJSON *sel_row(cJSON **rows, int *index)
+{
+	return D.root && UI.sel[0] ? row_find(D.root, UI.sel, rows, index) : NULL;
+}
+
+void ui_select(const char *place)
+{
+	select_place(place, true);
+}
+
 /* The step that holds a list: steps[2] for steps[2].then or steps[2].choice[1].steps; "" for steps. */
 static void parent_of_list(const char *list_place, char *out, size_t n)
 {
@@ -264,6 +275,11 @@ int ui_label_count(void)
 const char *ui_label_name(int i)
 {
 	return i >= 0 && i < nlabels ? labels[i].name : "";
+}
+
+const char *ui_label_place(int i)
+{
+	return i >= 0 && i < nlabels ? labels[i].place : "";
 }
 
 const char *ui_mod_id(void)
@@ -443,10 +459,48 @@ static void changed(const char *place)
 	doc_changed(place);
 }
 
+/* A choice's row selected: Delete, Copy, Up and Down work on its rows. */
+static bool row_op(int what, int dir)
+{
+	cJSON *rows;
+	int i;
+	if (!sel_row(&rows, &i))
+		return false;
+	if (!doc_editable())
+		return true;
+	char head[256], old[256], where[256];
+	row_step_place(UI.sel, head, sizeof head);
+	snprintf(old, sizeof old, "%s", UI.sel);
+	int n = cJSON_GetArraySize(rows), to = i;
+	if (what == 0) {
+		if (n <= 1) {
+			ui_error("A choice keeps one row at least");
+			return true;
+		}
+		cJSON_DeleteItemFromArray(rows, i);
+		to = i < n - 1 ? i : n - 2;
+	} else if (what == 1) {
+		cJSON_InsertItemInArray(rows, i + 1, cJSON_Duplicate(cJSON_GetArrayItem(rows, i), true));
+		to = i + 1;
+	} else {
+		to = i + dir;
+		if (to < 0 || to >= n)
+			return true;
+		cJSON *it = cJSON_DetachItemFromArray(rows, i);
+		cJSON_InsertItemInArray(rows, to, it);
+	}
+	snprintf(where, sizeof where, "%s.choice[%d]", head, to);
+	changed(what == 0 ? old : where);
+	select_place(where, true);
+	return true;
+}
+
 static void op_delete(void)
 {
 	cJSON *list;
 	int i;
+	if (row_op(0, 0))
+		return;
 	if (!doc_editable() || !sel_step(&list, &i))
 		return;
 	char lp[256], old[256];
@@ -468,6 +522,8 @@ static void op_duplicate(void)
 {
 	cJSON *list;
 	int i;
+	if (row_op(1, 0))
+		return;
 	cJSON *st = sel_step(&list, &i);
 	if (!doc_editable() || !st)
 		return;
@@ -485,6 +541,8 @@ static void op_move(int dir)
 {
 	cJSON *list;
 	int i;
+	if (row_op(2, dir))
+		return;
 	if (!doc_editable() || !sel_step(&list, &i))
 		return;
 	int n = cJSON_GetArraySize(list), to = i + dir;
@@ -541,7 +599,33 @@ static void op_add(const struct kind_info *k)
 	int i;
 	char lp[256] = "steps", where[256];
 	int at;
-	if (sel_step(&list, &i)) {
+	cJSON *rows;
+	int ri;
+	cJSON *row = sel_row(&rows, &ri);
+	bool row_way = cJSON_IsObject(row) && (cJSON_GetObjectItemCaseSensitive(row, "goto") || cJSON_GetObjectItemCaseSensitive(row, "end"));
+	if (row && (cJSON_IsObject(row) || (cJSON_IsString(row) && strcmp(row->valuestring, "-"))) && !row_way) {
+		/* A row selected: first in its own steps (a row that is only a text gets steps). */
+		cJSON *o = row_object(D.root, UI.sel, true);
+		cJSON *steps = cJSON_GetObjectItemCaseSensitive(o, "steps");
+		if (!cJSON_IsArray(steps)) {
+			steps = cJSON_CreateArray();
+			cJSON_AddItemToObject(o, "steps", steps);
+		}
+		list = steps;
+		at = 0;
+		snprintf(lp, sizeof lp, "%s.steps", UI.sel);
+	} else if (row) {
+		/* A separator, or a row that goes elsewhere: after the choice. */
+		char head[256];
+		row_step_place(UI.sel, head, sizeof head);
+		int dummy;
+		if (!place_find(D.root, head, &list, &i)) {
+			cJSON_Delete(st);
+			return;
+		}
+		place_list(head, lp, sizeof lp, &dummy);
+		at = i + 1;
+	} else if (sel_step(&list, &i)) {
 		int dummy;
 		place_list(UI.sel, lp, sizeof lp, &dummy);
 		at = i + 1;
@@ -578,7 +662,29 @@ static bool apply_edit(void)
 {
 	cJSON *list;
 	int i;
-	if (!doc_editable() || !sel_step(&list, &i))
+	if (!doc_editable())
+		return false;
+	cJSON *rows;
+	int ri;
+	if (!sel_step(&list, &i) && sel_row(&rows, &ri)) {
+		cJSON *row = NULL;
+		char why[256];
+		if (!scene_parse(edit_buf, &row, why, sizeof why)) {
+			snprintf(edit_why, sizeof edit_why, "%s", why);
+			return false;
+		}
+		if (!cJSON_IsString(row) && !cJSON_IsObject(row)) {
+			cJSON_Delete(row);
+			snprintf(edit_why, sizeof edit_why, "expected a row: a text, \"-\", or an object with \"text\"");
+			return false;
+		}
+		cJSON_ReplaceItemInArray(rows, ri, row);
+		edit_why[0] = 0;
+		changed(UI.sel);
+		edit_gen = -1;
+		return true;
+	}
+	if (!sel_step(&list, &i))
 		return false;
 	cJSON *st = NULL;
 	char why[256];
@@ -1256,7 +1362,19 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 			sum = xstrdup(buf);
 		} else if (!strcmp(k->key, "label") || !strcmp(k->key, "goto"))
 			tc = col(C_T_FLOW);
+		const char *to = NULL;
+		if (k && !strcmp(k->key, "goto")) {
+			to = cJSON_IsString(v) ? label_place(v->valuestring) : NULL;
+			if (!to) {
+				tc = col(C_BAD);
+				snprintf(buf, sizeof buf, "%s  \xC2\xB7 no such label in the file", sum);
+				free(sum);
+				sum = xstrdup(buf);
+			}
+		}
 		draw_text(dl, f, size, v2(x, ty), tc, sum, right);
+		if (to)
+			draw_text(dl, F_MONO, fs(12.5f), v2(x + text_w(f, size, sum) + S(12), ty + S(1.5f)), col(C_FAINT), to, right);
 		free(sum);
 	}
 	/* "+" at the row's foot while it is hovered: a new step after it. */
@@ -1282,9 +1400,10 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 }
 
 /* A branch's heading: then, else, or a choice's row. Returns whether its steps show. A step
- * dropped on it goes first in its list (list: the list's place, or NULL when it has none). */
-static bool branch_row(const char *id, int depth, const char *label, const char *hint, ImU32 label_col, bool has_steps,
-                       const char *list)
+ * dropped on it goes first in its list (list: the list's place, or NULL when it has none). A
+ * choice's row (row: its place) is selected by a click; its ▾ or a double click folds it. */
+static bool branch_row(const char *id, int depth, const char *label, const char *hint, ImU32 label_col, ImU32 hint_col,
+                       bool has_steps, const char *list, const char *row)
 {
 	igPushID_Str(id);
 	ImGuiStorage *store = igGetStateStorage();
@@ -1293,7 +1412,29 @@ static bool branch_row(const char *id, int depth, const char *label, const char 
 	float h = S(26);
 	V2 p = igGetCursorScreenPos();
 	float w = igGetContentRegionAvail().x;
-	if (igSelectable_Bool("##branch", false, 0, v2(w, h)) && has_steps) {
+	float ax = p.x + S(42) + (float)depth * S(22);
+	if (row) {
+		bool sel = !strcmp(UI.sel, row);
+		if (igSelectable_Bool("##branch", sel, ImGuiSelectableFlags_AllowDoubleClick, v2(w, h))) {
+			bool on_arrow = igGetMousePos().x < ax + S(16);
+			if (has_steps && (on_arrow || igIsMouseDoubleClicked_Nil(ImGuiMouseButton_Left))) {
+				open = !open;
+				ImGuiStorage_SetBool(store, key, open);
+			}
+			if (!on_arrow || !has_steps)
+				select_place(row, false);
+		}
+		if (sel && UI.scroll_to_sel) {
+			igSetScrollHereY(0.4f);
+			UI.scroll_to_sel = false;
+		}
+		vis_add(row);
+		if (sel) {
+			ImDrawList *dl = igGetWindowDrawList();
+			ImDrawList_AddRect(dl, p, v2(p.x + w, p.y + h), col_a(C_ACCENT, 0.6f), S(3), S(1), 0);
+			ImDrawList_AddRectFilled(dl, p, v2(p.x + S(3), p.y + h), col(C_SEL_BAR), 0, 0);
+		}
+	} else if (igSelectable_Bool("##branch", false, 0, v2(w, h)) && has_steps) {
 		open = !open;
 		ImGuiStorage_SetBool(store, key, open);
 	}
@@ -1319,7 +1460,7 @@ static bool branch_row(const char *id, int depth, const char *label, const char 
 	draw_text(dl, F_UI, size, v2(x, y), label_col, label, p.x + w - S(10));
 	if (hint && hint[0]) {
 		float lw = text_w(F_UI, size, label);
-		draw_text(dl, F_UI, fs(13), v2(x + lw + S(10), p.y + (h - fs(13)) / 2), col(C_FAINT), hint, p.x + w - S(10));
+		draw_text(dl, F_UI, fs(13), v2(x + lw + S(10), p.y + (h - fs(13)) / 2), hint_col, hint, p.x + w - S(10));
 	}
 	igPopID();
 	return open && has_steps;
@@ -1345,7 +1486,7 @@ static void draw_steps(cJSON *list, const char *lp, int depth, const cJSON *cast
 				snprintf(sub, sizeof sub, "%s.%s", place, br[i]);
 				int n = cJSON_GetArraySize(l);
 				snprintf(hint, sizeof hint, "%d step%s", n, n == 1 ? "" : "s");
-				if (branch_row(sub, depth + 1, br[i], hint, col(C_TEXT), n > 0, sub))
+				if (branch_row(sub, depth + 1, br[i], hint, col(C_TEXT), col(C_FAINT), n > 0, sub, NULL))
 					draw_steps(l, sub, depth + 2, cast);
 			}
 		} else if (!strcmp(kind, "choice")) {
@@ -1357,6 +1498,7 @@ static void draw_steps(cJSON *list, const char *lp, int depth, const cJSON *cast
 				char rp[256], label[600], hint[300] = "";
 				snprintf(rp, sizeof rp, "%s.choice[%d]", place, r);
 				cJSON *steps = NULL;
+				ImU32 hint_col = col(C_FAINT);
 				if (cJSON_IsString(row) && !strcmp(row->valuestring, "-")) {
 					snprintf(label, sizeof label, "\xE2\x80\x94 a separator \xE2\x80\x94");
 				} else if (cJSON_IsString(row)) {
@@ -1370,12 +1512,16 @@ static void draw_steps(cJSON *list, const char *lp, int depth, const cJSON *cast
 					const cJSON *end = cJSON_GetObjectItemCaseSensitive(row, "end");
 					size_t o = 0;
 					if (cond) {
-						char *j = json_inline(cond);
-						o += (size_t)snprintf(hint + o, sizeof hint - o, "if %s   ", j);
-						free(j);
+						char cw[200];
+						cond_words(cond, cw, sizeof cw);
+						o += (size_t)snprintf(hint + o, sizeof hint - o, "if %s   ", cw);
 					}
-					if (o < sizeof hint && cJSON_IsString(go))
-						o += (size_t)snprintf(hint + o, sizeof hint - o, "\xE2\x86\xAA %s", go->valuestring);
+					if (o < sizeof hint && cJSON_IsString(go)) {
+						bool there = label_place(go->valuestring) != NULL;
+						o += (size_t)snprintf(hint + o, sizeof hint - o, "\xE2\x86\xAA %s%s", go->valuestring, there ? "" : "  \xC2\xB7 no such label");
+						if (!there)
+							hint_col = col(C_BAD);
+					}
 					if (o < sizeof hint && end) {
 						char *j = cJSON_IsString(end) ? NULL : json_inline(end);
 						snprintf(hint + o, sizeof hint - o, "end: %s", j ? j : end->valuestring);
@@ -1391,7 +1537,7 @@ static void draw_steps(cJSON *list, const char *lp, int depth, const cJSON *cast
 				}
 				char sp[256];
 				snprintf(sp, sizeof sp, "%s.steps", rp);
-				if (branch_row(rp, depth + 1, label, hint, col(C_TEXT), steps && steps->child, steps ? sp : NULL)) {
+				if (branch_row(rp, depth + 1, label, hint, col(C_TEXT), hint_col, steps && steps->child, steps ? sp : NULL, rp)) {
 					draw_steps(steps, sp, depth + 2, cast);
 				}
 			}
@@ -1693,11 +1839,12 @@ static void middle(void)
 static void fill_edit(void)
 {
 	cJSON *st = sel_step(NULL, NULL);
+	cJSON *row = st ? NULL : sel_row(NULL, NULL);
 	edit_why[0] = 0;
-	if (!st) {
+	if (!st && !row) {
 		edit_buf[0] = edit_src[0] = 0;
 	} else {
-		char *t = step_write(st);
+		char *t = st ? step_write(st) : row_write(row);
 		snprintf(edit_buf, sizeof edit_buf, "%s", t);
 		snprintf(edit_src, sizeof edit_src, "%s", t);
 		free(t);
@@ -1758,6 +1905,16 @@ static void stage_foot(const struct stage *sg, bool own_line, int *page)
 	}
 }
 
+/* What ▶ and Play from here start at: the selected step, or a selected row's choice. */
+static const char *play_sel(char *out, size_t n)
+{
+	if (!sel_step(NULL, NULL) && sel_row(NULL, NULL))
+		row_step_place(UI.sel, out, n);
+	else
+		snprintf(out, n, "%s", UI.sel);
+	return out;
+}
+
 /* The stage's heading: the game's screen at the step, and its buttons to play it. */
 static void stage_label(bool steps)
 {
@@ -1773,7 +1930,9 @@ static void stage_label(bool steps)
 	float gap = S(6), pad = igGetStyle()->FramePadding.x * 2;
 	float wa = igCalcTextSize(a, NULL, false, 0).x + pad, wb = igCalcTextSize(b, NULL, false, 0).x + pad;
 	float ws = igCalcTextSize(stop, NULL, false, 0).x + pad;
-	bool can = D.root && UI.sel[0] && sel_step(NULL, NULL);
+	bool can = D.root && UI.sel[0] && (sel_step(NULL, NULL) || sel_row(NULL, NULL));
+	char pp[256];
+	play_sel(pp, sizeof pp);
 	if (play_active() && !play_preview()) {
 		igSameLine(content_right() - ws, 0);
 		if (igButton(stop, v2(0, 0)))
@@ -1784,11 +1943,11 @@ static void stage_label(bool steps)
 	igSameLine(content_right() - wa - gap - wb, 0);
 	igBeginDisabled(!can);
 	if (igButton(a, v2(0, 0)))
-		play_start(UI.sel, false);
+		play_start(pp, false);
 	igSetItemTooltip("Plays the selected step from the stage before it: its transition, slide, shake or pages");
 	igSameLine(0, gap);
 	if (igButton(b, v2(0, 0)))
-		play_start(UI.sel, true);
+		play_start(pp, true);
 	igSetItemTooltip("Plays on from the selected step as the game would: a click or Space for each page,\n"
 	                 "the menu's rows clicked, an if asked. Without the game: mods' functions and the game's\n"
 	                 "commands are passed by.");
@@ -1810,7 +1969,7 @@ static void stage_for_step(const cJSON *st)
 {
 	struct stage sg;
 	memset(&sg, 0, sizeof sg);
-	if (D.root && st)
+	if (D.root && (st || sel_row(NULL, NULL)))
 		stage_walk(D.root, UI.sel, &sg);
 	else
 		sg.cast = D.root ? cJSON_GetObjectItemCaseSensitive(D.root, "cast") : NULL;
@@ -1829,7 +1988,8 @@ static void stage_for_step(const cJSON *st)
 	if (*page < 0)
 		*page = 0;
 	/* ▶ stops when another step is selected; Play from here goes on. */
-	if (play_active() && !play_on() && strcmp(play_place(), UI.sel))
+	char pp[256];
+	if (play_active() && !play_on() && strcmp(play_place(), play_sel(pp, sizeof pp)))
 		play_stop();
 	if (play_draw(igGetContentRegionAvail().x)) {
 		play_foot();
@@ -1846,7 +2006,7 @@ static void stage_alone(float w)
 	const cJSON *st = sel_step(NULL, NULL);
 	struct stage sg;
 	memset(&sg, 0, sizeof sg);
-	if (st)
+	if (D.root && (st || sel_row(NULL, NULL)))
 		stage_walk(D.root, UI.sel, &sg);
 	int pages = sg.line ? line_pages(sg.line) : 0;
 	int page = sg.line == st ? fields_page : pages - 1;
@@ -1908,6 +2068,9 @@ static void right_side(void)
 	}
 	stage_label(true);
 	cJSON *st = sel_step(NULL, NULL);
+	cJSON *rows;
+	int ri;
+	cJSON *row = st ? NULL : sel_row(&rows, &ri);
 	bool typing = strcmp(edit_buf, edit_src) != 0;
 	if (strcmp(edit_for, UI.sel) || edit_gen != doc_gen || (!typing && (edit_at != D.at || D.live)))
 		fill_edit();
@@ -1916,6 +2079,36 @@ static void right_side(void)
 	ImDrawList_AddLine(igGetWindowDrawList(), igGetCursorScreenPos(),
 	                   v2(igGetCursorScreenPos().x + igGetContentRegionAvail().x, igGetCursorScreenPos().y), col(C_LINE), S(1));
 	igSpacing();
+	if (row) {
+		igBeginChild_Str("##fields", v2(0, 0), 0, 0);
+		ImDrawList *dl = igGetWindowDrawList();
+		V2 p = igGetCursorScreenPos();
+		float h = S(24);
+		bool sep = cJSON_IsString(row) && !strcmp(row->valuestring, "-");
+		float pw = tag_pill(dl, p, sep ? "SEPARATOR" : "ROW", TAG_FLOW, h);
+		igDummy(v2(pw, h));
+		igSameLine(0, S(10));
+		igAlignTextToFramePadding();
+		if (sep)
+			igTextUnformatted("A separator of the choice", NULL);
+		else
+			igText("Row %d of the choice", ri + 1);
+		float pw2 = text_w(F_MONO, fs(13), UI.sel);
+		igSameLine(content_right() - pw2, 0);
+		igPushFont(F_MONO, 13);
+		igTextColored(colv(C_FAINT), "%s", UI.sel);
+		igPopFont();
+		igSpacing();
+		bool ro = !doc_editable();
+		if (ro)
+			igTextColored(colv(C_FAINT), "Read-only: %s", D.root ? "this editor does not write this file" : "the file cannot be read");
+		fields_row(rows, ri, UI.sel, ro);
+		igSpacing();
+		igSpacing();
+		step_json(ro);
+		igEndChild();
+		return;
+	}
 	if (!st) {
 		igPushTextWrapPos(0);
 		igTextColored(colv(C_FAINT), D.open ? "Select a step: its fields come here." : "Open a scene to see its steps.");
@@ -2297,6 +2490,17 @@ static void modals(void)
 	picker_frame();
 }
 
+/* The selected row back to a plain text when it has nothing else. */
+static void row_tidy(void)
+{
+	cJSON *rows;
+	int ri;
+	cJSON *o = row_find(D.root, UI.sel, &rows, &ri);
+	cJSON *t = cJSON_GetObjectItemCaseSensitive(o, "text");
+	if (cJSON_IsObject(o) && o->child && !o->child->next && cJSON_IsString(t))
+		cJSON_ReplaceItemInArray(rows, ri, cJSON_CreateString(t->valuestring));
+}
+
 /* ---- an action by name (--shot --do), as the window's own buttons do it ---- */
 
 static int held_preview;   /* preview=N: a list's row held as hovered */
@@ -2309,7 +2513,71 @@ bool ui_do(const char *action)
 	const char *arg = eq ? eq + 1 : "";
 	if (!strcmp(name, "select")) {
 		select_place(arg, true);
-		return place_find(D.root, arg, NULL, NULL) != NULL;
+		return place_exists(D.root, arg);
+	}
+	if (!strcmp(name, "cond")) {   /* cond=OP:PATH[:ARG]: the selected if's or row's condition changed */
+		if (!doc_editable())
+			return false;
+		cJSON *st = sel_step(NULL, NULL);
+		const char *kind = st ? step_kind(st) : NULL;
+		cJSON *owner = kind && !strcmp(kind, "if") ? st : NULL;
+		if (!owner && !st)
+			owner = row_object(D.root, UI.sel, true);
+		if (!owner)
+			return false;
+		char why[200];
+		bool ok = cond_do(owner, "if", owner == st, arg, why, sizeof why);
+		if (!ok) {
+			printf("cond: %s\n", why[0] ? why : "not done");
+			fflush(stdout);
+		}
+		if (!st)
+			row_tidy();
+		if (ok)
+			changed(UI.sel);
+		return ok;
+	}
+	if (!strcmp(name, "does")) {   /* does=on|steps|goto:LABEL|end:VALUE: what the selected row does */
+		cJSON *o = doc_editable() ? row_object(D.root, UI.sel, true) : NULL;
+		if (!o)
+			return false;
+		cJSON_DeleteItemFromObjectCaseSensitive(o, "steps");
+		cJSON_DeleteItemFromObjectCaseSensitive(o, "goto");
+		cJSON_DeleteItemFromObjectCaseSensitive(o, "end");
+		if (!strcmp(arg, "steps"))
+			cJSON_AddItemToObject(o, "steps", cJSON_CreateArray());
+		else if (!strncmp(arg, "goto:", 5))
+			cJSON_AddStringToObject(o, "goto", arg + 5);
+		else if (!strncmp(arg, "end:", 4))
+			cJSON_AddStringToObject(o, "end", arg + 4);
+		else if (strcmp(arg, "on"))
+			return false;
+		row_tidy();
+		changed(UI.sel);
+		return true;
+	}
+	if (!strcmp(name, "label")) {   /* label=NAME: the selected label renamed, its go-tos with it */
+		cJSON *st = sel_step(NULL, NULL);
+		const char *kind = st ? step_kind(st) : NULL;
+		if (!doc_editable() || !kind || strcmp(kind, "label"))
+			return false;
+		char why[200];
+		int moved = fields_label_rename(st, arg, why, sizeof why);
+		if (moved < 0) {
+			printf("label: %s\n", why);
+			return false;
+		}
+		changed(UI.sel);
+		printf("label: %d go-to%s moved\n", moved, moved == 1 ? "" : "s");
+		fflush(stdout);
+		return true;
+	}
+	if (!strcmp(name, "printfile")) {   /* the whole file as the editor writes it, on stdout */
+		char *t = D.root ? scene_write(D.root) : NULL;
+		printf("file\n%s", t ? t : "none\n");
+		fflush(stdout);
+		free(t);
+		return t != NULL;
 	}
 	if (!strcmp(name, "add")) {
 		const struct kind_info *k = kind_find(arg);
@@ -2381,8 +2649,10 @@ bool ui_do(const char *action)
 		ImGuiIO_AddMousePosEvent(igGetIO_Nil(), x, y);
 	} else if (!strcmp(name, "mdown") || !strcmp(name, "mup")) {   /* the left button pressed, let go */
 		ImGuiIO_AddMouseButtonEvent(igGetIO_Nil(), 0, name[1] == 'd');
-	} else if (!strcmp(name, "printstep")) {   /* the selected step and the cast as JSON, on stdout */
+	} else if (!strcmp(name, "printstep")) {   /* the selected step (or row) and the cast as JSON, on stdout */
 		cJSON *st = sel_step(NULL, NULL);
+		if (!st)
+			st = sel_row(NULL, NULL);
 		char *j = st ? json_inline(st) : NULL;
 		const cJSON *cast = D.root ? cJSON_GetObjectItemCaseSensitive(D.root, "cast") : NULL;
 		char *c = cast ? json_inline(cast) : NULL;

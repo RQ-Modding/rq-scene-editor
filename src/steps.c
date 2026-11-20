@@ -217,8 +217,9 @@ char *step_summary(const cJSON *st, const cJSON *cast)
 		if (cJSON_IsString(into))
 			add(&o, "  \xE2\x86\x92 %s", into->valuestring);
 	} else if (!strcmp(kind, "if")) {
-		add(&o, "If ");
-		add_value(&o, v);
+		char cw[300];
+		cond_words(v, cw, sizeof cw);
+		add(&o, "If %s", cw);
 	} else if (!strcmp(kind, "label")) {
 		add(&o, "\xE2\x97\x86 ");
 		add_value(&o, v);

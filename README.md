@@ -7,7 +7,7 @@ A scene file is a mod's scene as JSON: the cast, then the steps the game plays (
 music, choices, branches). A mod plays one with `rq.scene.file`. The editor lists a mod's scene
 files, shows each file's steps as a list with its branches as a tree, and writes the file back.
 
-**State: 0.5.0, not released.** What it does so far:
+**State: 0.6.0, not released.** What it does so far:
 
 - it finds the game folder and lists the game's mods, or opens a mod's folder from anywhere;
 - it lists the mod's scene files, with a line count and why a file cannot be read;
@@ -27,13 +27,18 @@ files, shows each file's steps as a list with its branches as a tree, and writes
   plays on the stage;
 - it picks a face, a picture, a track or a sound in a window of the game's own, by its look and its
   name (the faces and the standing pictures by character), or a picture in the mod's folder;
+- it builds a condition from a list of checks (a flag, a variable, the mod's function, a quest
+  cleared, a character recruited or in the party, an item owned, the gold, a chance), with Not and
+  groups of "all of" and "any of"; quests, characters and items come from RQ MOD's names;
+- it edits a choice's rows: the text, the comment, the condition that shows the row, what the row
+  does (its own steps, a go-to or an end), its colour and its sound; and labels, renamed with the
+  go-tos that lead to them;
 - it edits the cast: faces, name plates, renaming an entry with the lines that use it;
 - it has undo and redo, and it notices when a file changes on disk;
 - it reads each file as RQ MOD reads it, so a file the game refuses shows the game's own message;
 - it has two looks, Copandon (dark, the default) and Parchment (light).
 
-Still to come: the conditions, and a choice row's condition, colour and sound, in fields; RQ MOD's
-own checks on the file; and Play in the game, which starts the scene in the running game. It will
+Still to come: RQ MOD's own checks on the file in a list of problems; and Play in the game, which starts the scene in the running game. It will
 ship in RQ MOD's package, as Rance Browser does.
 
 It is a fan project. AliceSoft and MangaGamer do not make or endorse it, and it contains nothing of
@@ -76,6 +81,22 @@ name at the bottom to pick another.
   writes the cast's name, and **Add to the cast as...** puts another face into the cast with a
   name. The scene CGs, the game's event pictures with its adult scenes among them, show only after
   **Show the scene CGs**, once a session. A track or a sound plays with ▶ before it is picked.
+- **Choices:** a choice's rows are listed under it. Click a row (or **›** beside it in the choice's
+  fields) for its own fields: the text, the comment, **Shown if** (the row shows only when its
+  condition holds), **Does** (goes on after the choice, its own steps under it in the list, goes to
+  a label, or ends the scene with a value such as `clear`), its colour and its sound. Up, Down,
+  Copy and Delete move, copy and remove the selected row; **+ Add step** on a row puts a step into
+  its own steps. On the stage the row shows under the cursor, and a row with a condition is marked
+  "if" (the editor's mark: the game shows the row or not).
+- **Conditions:** an `if` and a row's **Shown if** are built from checks: each check is a kind from
+  the list and its value, **Not** turns it around, **+ Check** adds one and **+ Group** a group of
+  its own. A group is **All of**, **Any of**, **Not all of** or **None of**. A flag, a variable or a
+  function offers the names the file already uses (▾); a quest, a character or an item is picked
+  from RQ MOD's names by name or number, or typed as a mod's own id (`mymod:thing`). A check the
+  builder does not show (a value from the mod's own code, say) stays as its JSON, to edit there.
+- **Labels and go-tos:** a go-to picks one of the file's labels, with the label's place beside it;
+  a go-to with no such label is red in the list and in its fields. A label renamed takes the go-tos
+  to it with it, unless another label had the old name too.
 - **Cast and file:** the cast, each entry with its face, its name plate and the lines that use it,
   and the file's own fields (Plays once, the format, the schema).
 - **Keys:** Ctrl+S saves, Ctrl+Z undoes, Ctrl+Y (or Ctrl+Shift+Z) redoes, Up and Down move through the
@@ -134,13 +155,21 @@ rq-scene-editor --mixer-check [--game DIR]
   `ptab=faces|standing|backgrounds|small|scene|other|mod`, `group=N`, `tile=NUMBER|PATH`,
   `showscene`, `use` and `addcast[=NAME]`. `printstep` prints the selected step and the cast as
   JSON on stdout. `mouse=X,Y`, `mdown` and `mup` move the mouse and press its left button, as the
-  window takes a mouse. `frame` draws a frame before the actions after it, so a run can go through
-  a scene; the shot waits a few frames after the last actions.
+  window takes a mouse. The branches: `cond=OP:PATH[:ARG]` changes the condition of the selected
+  `if` or row, as the builder's buttons do: OP is `add` (ARG a kind, such as `gold`), `group`,
+  `del`, `not`, `kind` (ARG the new kind), `mode` (ARG `all`, `any`, `notall` or `none`) or `value`
+  (ARG the check as JSON); PATH is the check's place in the groups, empty for the whole condition,
+  `1` for the second check of the top group, `1.0` for the first check in that one's group.
+  `does=on|steps|goto:LABEL|end:VALUE` sets what the selected row does, `label=NAME` renames the
+  selected label with its go-tos, and `printfile` prints the whole file as the editor writes it.
+  `frame` draws a frame before the actions after it, so a run can go through a scene; the shot
+  waits a few frames after the last actions.
 - `--mixer-check` mixes Play from here's sounds without a sound device and checks them: two sounds
   at once, a track's fade halfway, its loop, a sound's end.
 - `--selftest` tries editing, undo, saving and changes on disk on FILE. FILE must be a copy: it is
   written.
-- A step's place is written as `steps[4]`, `steps[2].then[0]` or `steps[3].choice[1].steps[0]`.
+- A step's place is written as `steps[4]`, `steps[2].then[0]` or `steps[3].choice[1].steps[0]`;
+  a choice's row as `steps[3].choice[1]`.
 
 The runs that need no one (`--check`, `--format`, `--shot`, `--selftest`, `--mixer-check`) print a
 failure to the console and exit with code 3 instead of opening a dialog. `--shot` plays no sound.

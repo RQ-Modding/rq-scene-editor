@@ -2,6 +2,37 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 0.6.0 (not released)
+
+Branches: a choice's rows, conditions built from checks, labels and go-tos.
+
+- **A choice's rows have fields of their own.** A row is selected in the list like a step (or with
+  › in the choice's fields): its text and comment, **Shown if**, **Does** (goes on after the
+  choice, its own steps, a go-to to a label, or an end with its value: clear, fail, abandon or
+  escape), its colour and its sound (with Pick... and ▶). A row that is only a text stays a text
+  in the file until something else is given to it, and goes back to one when the rest is taken
+  away. Up, Down, Copy and Delete work on the selected row, a choice keeping one row at least;
+  **+ Add step** on a row puts the step into its own steps, or after the choice when the row ends
+  or goes to a label. The list shows each row's condition in words and where it goes.
+- **The condition builder.** An `if` and a row's **Shown if** are a list of checks, each picked
+  from a list: a flag set, a variable (is, is not set, at least, at most, from ... to), the mod's
+  function with its values, a quest cleared, a character recruited or in the party, an item owned,
+  the gold, a chance. **Not** turns a check around; **+ Check** and **+ Group** add to a group,
+  and a group is All of, Any of, Not all of or None of. A group left with one check gives way to
+  that check, and an `if` keeps one check at least. Flags, variables and functions offer the names
+  the file already uses; quests, characters (with their faces) and items come from RQ MOD's names
+  by name or number, and a mod's own id is typed. A check the builder does not show stays as its
+  JSON. In a narrow row the value goes on the line under the check's kind. The list writes an `if`
+  in words ("If 50% chance", "If not flag mymod:met").
+- **Labels and go-tos.** A go-to picks one of the file's labels, each with its place; a go-to whose
+  label the file does not have is red in the list and in its fields. Renaming a label moves the
+  go-tos that lead to it, when no other label had that name; a name another label has is refused.
+- **The stage** draws the selected row under the cursor (the game's own hover picture) and marks a
+  row with a condition "if".
+- **For checks and agents,** `--do cond=OP:PATH[:ARG]`, `does=...`, `label=NAME` and `printfile`;
+  `select=` and `printstep` take a row's place (`steps[2].choice[1]`). `--selftest` tries the
+  builder's changes.
+
 ## 0.5.0 (not released)
 
 Pickers: the game's pictures, music and sounds by their look and their names.
