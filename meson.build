@@ -1,5 +1,5 @@
 # RQ Scene Editor: a window to write RQ MOD's scene files (a mod's scenes as JSON) for Rance Quest
-# Magnum, without Lua and without typing JSON. Built on Windows with MSYS2 MINGW64; see README.md.
+# Magnum, without Lua and without typing JSON. Built on Windows with MSYS2 UCRT64; see README.md.
 #
 # Alone:           meson setup build && ninja -C build
 #                  (Rance Browser and libsys4 come as the submodules in subprojects/)

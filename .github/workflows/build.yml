@@ -30,6 +30,8 @@ jobs:
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
+          # UCRT64: MSYS2 deprecated MINGW64 (the old msvcrt.dll runtime) and drops packages from it.
+          msystem: UCRT64
           update: true
           # flex and bison build libsys4's ini parser. base-devel brought them until its 2026.11 update.
           install: >-
@@ -38,21 +40,21 @@ jobs:
             bison
             git
             zip
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-meson
-            mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-python
-            mingw-w64-x86_64-SDL2
-            mingw-w64-x86_64-libsndfile
-            mingw-w64-x86_64-libjpeg-turbo
-            mingw-w64-x86_64-libwebp
-            mingw-w64-x86_64-libpng
-            mingw-w64-x86_64-libdeflate
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-SDL2
+            mingw-w64-ucrt-x86_64-libsndfile
+            mingw-w64-ucrt-x86_64-libjpeg-turbo
+            mingw-w64-ucrt-x86_64-libwebp
+            mingw-w64-ucrt-x86_64-libpng
+            mingw-w64-ucrt-x86_64-libdeflate
 
       # libjpeg-turbo 3.2.1 puts a copy of zlib inside its static library, so a static link beside
       # zlib fails (z_errmsg defined twice). 3.2.0 links.
       - name: Pin libjpeg-turbo 3.2.0
-        run: pacman -U --noconfirm https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libjpeg-turbo-3.2.0-1-any.pkg.tar.zst
+        run: pacman -U --noconfirm https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libjpeg-turbo-3.2.0-1-any.pkg.tar.zst
 
       - name: Version
         id: version
@@ -83,7 +85,7 @@ jobs:
           pkg=RQSceneEditor
           mkdir -p $pkg/licenses/imgui $pkg/licenses/cimgui $pkg/licenses/lua $pkg/licenses/rance-browser
           cp build/rq-scene-editor.exe README.md CHANGELOG.md CREDITS.md COPYING $pkg/
-          cp -r /mingw64/share/licenses/. $pkg/licenses/
+          cp -r /ucrt64/share/licenses/. $pkg/licenses/
           # MSYS2 installs no license file for libvorbis and LAME, linked in through libsndfile.
           cp -r licenses/. $pkg/licenses/
           cp subprojects/rance-browser/third_party/cimgui/imgui/LICENSE.txt $pkg/licenses/imgui/

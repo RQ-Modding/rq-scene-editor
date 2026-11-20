@@ -262,13 +262,13 @@ failure to the console and exit with code 3 instead of opening a dialog. `--shot
 
 ## Building
 
-Windows, with [MSYS2](https://www.msys2.org/) in its MINGW64 shell:
+Windows, with [MSYS2](https://www.msys2.org/) in its UCRT64 shell:
 
 ```
-pacman -S --needed base-devel git mingw-w64-x86_64-gcc mingw-w64-x86_64-meson \
-    mingw-w64-x86_64-pkg-config mingw-w64-x86_64-python mingw-w64-x86_64-SDL2 \
-    mingw-w64-x86_64-libsndfile mingw-w64-x86_64-libjpeg-turbo mingw-w64-x86_64-libwebp \
-    mingw-w64-x86_64-libpng mingw-w64-x86_64-libdeflate
+pacman -S --needed base-devel git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-meson \
+    mingw-w64-ucrt-x86_64-pkg-config mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-SDL2 \
+    mingw-w64-ucrt-x86_64-libsndfile mingw-w64-ucrt-x86_64-libjpeg-turbo mingw-w64-ucrt-x86_64-libwebp \
+    mingw-w64-ucrt-x86_64-libpng mingw-w64-ucrt-x86_64-libdeflate
 git clone --recurse-submodules https://github.com/RQ-Modding/rq-scene-editor.git
 cd rq-scene-editor
 meson setup build --buildtype=release
@@ -279,7 +279,7 @@ The program is `build/rq-scene-editor.exe`, linked statically: it needs only Win
 
 libjpeg-turbo 3.2.1 cannot be linked statically beside zlib (both define `z_errmsg`). Until that is
 fixed, install 3.2.0:
-`pacman -U https://repo.msys2.org/mingw/mingw64/mingw-w64-x86_64-libjpeg-turbo-3.2.0-1-any.pkg.tar.zst`.
+`pacman -U https://repo.msys2.org/mingw/ucrt64/mingw-w64-ucrt-x86_64-libjpeg-turbo-3.2.0-1-any.pkg.tar.zst`.
 
 The editor reads the game through [Rance Browser](https://github.com/RQ-Modding/rance-browser)'s
 readers, the static library `rance_core`, which comes with Dear ImGui (cimgui), SDL2 and libsys4. Both
