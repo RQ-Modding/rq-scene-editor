@@ -251,6 +251,19 @@ const cJSON *line_face(const cJSON *line, const cJSON *cast)
 	return f;
 }
 
+int line_face_no(const cJSON *line, const cJSON *cast)
+{
+	const char *kind = step_kind(line);
+	if (!kind || (strcmp(kind, "say") && strcmp(kind, "think")))
+		return 0;
+	const cJSON *f = get(line, kind);
+	if (cJSON_IsString(f) && !strchr(f->valuestring, '.'))
+		f = get(get(cast, f->valuestring), "face");
+	if (cJSON_IsNumber(f))
+		return f->valuedouble > 0 ? (int)f->valuedouble : 0;
+	return cJSON_IsString(f) && f->valuestring[0] ? MOD_FACE_CG : 0;
+}
+
 const char *line_plate(const cJSON *line, const cJSON *cast, bool *game)
 {
 	if (game)
@@ -660,6 +673,31 @@ int stage_letters(const cJSON *line, const char *page)
 	struct laid L;
 	lay(as_shown(page), frame_room(&frames[f ? f : 1]), &L);
 	return letters_of(&L);
+}
+
+int stage_letter_ms(const struct stage *s)
+{
+	return letter_ms(s) > 0 ? letter_ms(s) : 0;
+}
+
+int stage_page_letters(const struct stage *s, int page, uint32_t *cp, int max)
+{
+	const char *text = s->line ? line_page(s->line, page) : NULL;
+	if (!text)
+		return 0;
+	int f = line_frame(s->line);
+	struct laid L;
+	lay(as_shown(text), frame_room(&frames[f ? f : 1]), &L);
+	int n = 0;
+	for (int i = 0; i < L.n; i++)
+		for (const unsigned char *c = (const unsigned char *)L.a[i]; c < (const unsigned char *)L.b[i] && n < max; c += utf8_len((const char *)c)) {
+			int len = utf8_len((const char *)c);
+			uint32_t u = len == 1 ? c[0] : len == 2 ? c[0] & 0x1F : len == 3 ? c[0] & 0x0F : c[0] & 0x07;
+			for (int k = 1; k < len; k++)
+				u = u << 6 | (c[k] & 0x3F);
+			cp[n++] = u;
+		}
+	return n;
 }
 
 float stage_page_ms(const struct stage *s, int page)

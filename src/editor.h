@@ -168,6 +168,11 @@ const char *media_music_name(int no);     /* rq.ids.music's name, or NULL */
 /* A place of the game's world map (1 to 40), as its code names it, and its point. */
 #define PLACES_MAX 40
 bool media_place(int no, int *x, int *y, const char **name);
+/* The two sounds a line with this face makes as its letters come in and the ms each waits before
+ * the next (the game's メッセージ効果音番号); false when it makes none (narration's 0) or the game's
+ * table is unknown. A mod's own picture (900000 and up) gets the game's default. */
+bool media_face_beep(int face, int sound[2], int wait[2]);
+bool media_beeps_known(void);
 bool media_can_play(int kind, int no);
 bool media_playing(int kind, int no);
 void media_play(int kind, int no);        /* plays, or stops when it is playing */
@@ -244,6 +249,14 @@ int page_lines(const cJSON *line, const char *page);
 const char *line_plate(const cJSON *line, const cJSON *cast, bool *game);
 /* The face a line shows (a number or a path), from the cast when it names one; NULL for none. */
 const cJSON *line_face(const cJSON *line, const cJSON *cast);
+/* The face number the game is given for a line's sounds (hidden or not): 0 for narration or none,
+ * MOD_FACE_CG for a picture of the mod's (rq.image.add numbers it from 900000). */
+#define MOD_FACE_CG 900000
+int line_face_no(const cJSON *line, const cJSON *cast);
+/* The letters of a page as the stage shows them, in order (as code points), up to max; and the
+ * milliseconds between two letters (0: the page at once). */
+int stage_page_letters(const struct stage *s, int page, uint32_t *cp, int max);
+int stage_letter_ms(const struct stage *s);
 /* The box's text at the game's 1024 by 768: the game's size 40, measured on its shots as 32 pixels
  * to the em in its font, which Dear ImGui calls 43.6 (it sizes a font by its whole height), on lines
  * 35 pixels apart (its size 40 and line space -5). Other text of the game's is drawn at its size times BOX_TEXT_SIZE / 40. */
@@ -289,6 +302,7 @@ void play_pick(int row);                /* a row of the menu on show clicked */
 void play_answer(bool then);            /* the if asked: then or else */
 const char *play_status(void);          /* what the player waits for, and its note */
 bool play_preview(void);                /* playing an effect's preview */
+void play_print_beeps(void);            /* --do printbeeps */
 const char *play_place(void);           /* the place it began at */
 /* The game's shake mode for the screen (part 0), the face (1) or the standing picture (2): the size
  * across and up and down in game pixels, and the time in ms. */

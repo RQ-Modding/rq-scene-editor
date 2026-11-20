@@ -83,7 +83,9 @@ name at the bottom to pick another.
   plays on from the selected step: a click on the stage or Space (or Enter) shows the rest of a
   page, then the next one; a choice waits for a click on one of its rows; an `if` asks which way
   it goes; `goto` and labels are followed; the music changes as the game changes it, and the
-  sounds and jingles play. A mod's function (`call`, `cmd`) and the event flags are passed by and
+  sounds and jingles play. A line makes the game's sounds as its letters come in, by its face as
+  the game's table has them (a picture of the mod's gets the game's own default pair), only inside
+  quotes and none for narration, as in the game. A mod's function (`call`, `cmd`) and the event flags are passed by and
   named under the stage. Escape or **Stop** ends it. The step playing is marked in the list.
 - **Play in the game:** with the game running RQ MOD, **▶ Play** in the top bar saves the file and
   plays it in the game from its first step, and **▶ From here** from the selected step (a row: its
@@ -214,8 +216,9 @@ rq-scene-editor --mixer-check [--game DIR]
   screen pixel for pixel. Nothing is saved. On the stage: `play` (▶ on the selected step),
   `playon` (Play from here), `clock=MS` (the player's clock held at MS), `click`, `pick=ROW`
   (a row of the menu on show), `answer=then|else` (the `if` asked), `preview=EFFECT` (a row of an
-  effect's or a shake's list hovered) and `print` (the step playing and the line under the stage,
-  on stdout). The pickers: `picker` or `picker=KEY` (Pick... beside the selected step's value, or
+  effect's or a shake's list hovered), `print` (the step playing and the line under the stage,
+  on stdout) and `printbeeps` (the last line's face, its two sounds with their waits, and each
+  sound played with the page's milliseconds: `beeps face 2000: 915/70 916/70 | 915@0 916@85`). The pickers: `picker` or `picker=KEY` (Pick... beside the selected step's value, or
   beside the one of that key, such as `background` in a picture set), then `find=TEXT`,
   `ptab=faces|standing|backgrounds|small|scene|other|mod`, `group=N`, `tile=NUMBER|PATH`,
   `showscene`, `use` and `addcast[=NAME]`. `printstep` prints the selected step and the cast as

@@ -1530,8 +1530,12 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 			draw_text(dl, F_MONO, fs(12.5f), v2(x + text_w(f, size, sum) + S(12), ty + S(1.5f)), col(C_FAINT), to, right);
 		free(sum);
 	}
-	/* "+" at the row's foot while it is hovered: a new step after it. */
-	if (doc_editable() && !igIsDragDropActive() && igIsWindowHovered(0) && igIsMouseHoveringRect(p, b, false)) {
+	/* "+" at the row's foot while it is hovered: a new step after it. Kept while it is held: a
+	 * pressed button stops the window counting as hovered, and a button not drawn at the release
+	 * is never clicked. */
+	bool plus_held = igGetActiveID() == igGetID_Str("##plus");
+	if (doc_editable() && !igIsDragDropActive()
+	    && (plus_held || (igIsWindowHovered(0) && igIsMouseHoveringRect(p, b, false)))) {
 		float r = S(8);
 		V2 c = v2(p.x + S(4) + r, b.y - r - S(1));
 		igSameLine(0, 0);
@@ -3977,6 +3981,8 @@ bool ui_do(const char *action)
 		play_pick(atoi(arg));
 	else if (!strcmp(name, "answer"))   /* answer=then|else: the if asked */
 		play_answer(!strcmp(arg, "then"));
+	else if (!strcmp(name, "printbeeps"))   /* the last page's face, its sounds and what played, on stdout */
+		play_print_beeps();
 	else if (!strcmp(name, "print")) {   /* what plays, on stdout */
 		printf("play %s %s | %s\n", play_active() ? "on" : "off", play_step_place(), play_status());
 		fflush(stdout);

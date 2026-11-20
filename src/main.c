@@ -30,7 +30,7 @@ SDL_Window *g_window;
 static struct {
 	const char *game, *mod, *mod_dir, *file, *select, *dir, *out, *selftest;
 	bool check, strict, mixer_check;
-	const char *dos[64];   /* --do actions, in order */
+	const char *dos[256];  /* --do actions, in order */
 	int ndo;
 	int format_at;   /* argv index of the first file for --format, or 0 */
 	const char *shot_path;
@@ -60,7 +60,8 @@ static void usage(void)
 	       "      modal=unsaved|layout|changed|new, fold (nothing is saved); the stage: play (the\n"
 	       "      step's motion), playon (Play from here), clock=MS (its clock held), click,\n"
 	       "      pick=ROW, answer=then|else, preview=EFFECT (a list's row hovered), print (what\n"
-	       "      plays, on stdout); the branches: cond=OP:PATH[:ARG] (the selected if's or row's\n"
+	       "      plays, on stdout), printbeeps (the sounds of the line's letters, on stdout); the\n"
+	       "      branches: cond=OP:PATH[:ARG] (the selected if's or row's\n"
 	       "      condition: add, group, del, not, kind, mode, value), does=on|steps|goto:LABEL|\n"
 	       "      end:VALUE (the selected row), label=NAME (its go-tos with it), printstep,\n"
 	       "      printfile; the bottom panel: panel=problems|log|logall|find, printproblems,\n"

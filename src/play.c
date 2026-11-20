@@ -130,6 +130,99 @@ static void sound_jingle(int no)
 		mixer_sound(no);
 }
 
+/* The sounds of a line as its letters come in, as the game's T_MessageSound makes them for each
+ * page: the face's two sounds (media_face_beep) taken in turn, the first at the first letter inside
+ * quotes, each next one at a letter that comes once the last one's wait is over. Letters outside
+ * quotes make none ("check": an opening 「 （ 『 " ( or “ starts them, its closing one ends them and
+ * is silent). None when the page shows at once (speed 0), and none for the letters a click shows
+ * whole (the game draws them with no effect). */
+#define BEEP_LETTERS 1024
+#define BEEP_LOG 64
+static struct {
+	const struct beat *beat;     /* the page they are for */
+	uint32_t cp[BEEP_LETTERS];
+	int n, at;                   /* the page's letters, the next one to come */
+	int face, sound[2], wait[2]; /* the face's pair; sound[0] 0 for none */
+	uint32_t close;              /* the closing quote while one is open, else 0 */
+	int index;                   /* the sound last played (-1: none yet on this page) */
+	double last;                 /* when it played */
+	int log[BEEP_LOG][2];        /* what played since the play began, for printbeeps: the sound, the page's ms */
+	int nlog;
+} BP;
+
+/* T_MessageSound::check: true for a letter that sounds. */
+static bool beep_check(uint32_t c)
+{
+	if (BP.close) {
+		if (c == BP.close) {
+			BP.close = 0;
+			return false;
+		}
+		return true;
+	}
+	static const uint32_t pair[6][2] = {
+		{ 0x300C, 0x300D }, { 0xFF08, 0xFF09 }, { 0x300E, 0x300F }, { '"', '"' }, { '(', ')' }, { 0x201C, 0x201D },
+	};
+	for (int i = 0; i < 6; i++)
+		if (c == pair[i][0]) {
+			BP.close = pair[i][1];
+			return true;
+		}
+	return false;
+}
+
+static void beeps_begin(const struct beat *b)
+{
+	BP.beat = b;
+	BP.n = BP.at = 0;
+	BP.close = 0;
+	BP.index = -1;
+	BP.face = line_face_no(b->to.line, b->to.cast);
+	BP.sound[0] = 0;
+	if (stage_letter_ms(&b->to) <= 0 || !media_face_beep(BP.face, BP.sound, BP.wait))
+		return;
+	BP.n = stage_page_letters(&b->to, b->to_page, BP.cp, BEEP_LETTERS);
+}
+
+static void beeps_tick(const struct beat *b, double now)
+{
+	if (BP.beat != b || !BP.sound[0])
+		return;
+	double t = now - b->t0;
+	int every = stage_letter_ms(&b->to);
+	while (BP.at < BP.n && (double)BP.at * every <= t) {
+		if (!beep_check(BP.cp[BP.at++]))
+			continue;
+		if (BP.index >= 0 && now - BP.last < BP.wait[BP.index])
+			continue;
+		BP.index = BP.index < 0 ? 0 : (BP.index + 1) % 2;
+		int no = BP.sound[BP.index];
+		BP.last = now;
+		if (BP.nlog < BEEP_LOG) {
+			BP.log[BP.nlog][0] = no;
+			BP.log[BP.nlog][1] = (int)(t + 0.5);
+			BP.nlog++;
+		}
+		/* None in a shot, nor in a hovered row's preview. */
+		if (!UI.shot && !P.preview && media_can_play(SOUND_EFFECT, no))
+			mixer_sound(no);
+	}
+}
+
+/* --do printbeeps: the face of the last page, its sounds, and what played (the sound at the page's ms). */
+void play_print_beeps(void)
+{
+	printf("beeps face %d: ", BP.face);
+	if (BP.sound[0])
+		printf("%d/%d %d/%d |", BP.sound[0], BP.wait[0], BP.sound[1], BP.wait[1]);
+	else
+		printf("none |");
+	for (int i = 0; i < BP.nlog; i++)
+		printf(" %d@%d", BP.log[i][0], BP.log[i][1]);
+	printf("\n");
+	fflush(stdout);
+}
+
 /* ---- shakes ---- */
 
 /* The game's shake modes (全画面揺れ; 顔揺れ and 立ち絵揺れ at 16, 32 and 64): the size across,
@@ -618,6 +711,7 @@ void play_stop(void)
 	P.root = NULL;
 	memset(shakes, 0, sizeof shakes);
 	npending = 0;
+	BP.beat = NULL;
 }
 
 static void begin(const char *place, bool on)
@@ -635,6 +729,7 @@ static void begin(const char *place, bool on)
 	P.pick = P.ask = -1;
 	P.nbeats = P.at = 0;
 	P.step = NULL;
+	BP.nlog = 0;
 	stage_walk_before(P.root, place, &P.cur);
 	/* The line before shows its last page. */
 	P.page = P.cur.line ? line_pages(P.cur.line) - 1 : 0;
@@ -720,6 +815,7 @@ static void begin_beat(struct beat *b, double t)
 		for (int i = 0; i < npending; i++)
 			shake_mode_start(pending[i][0], pending[i][1], t);
 		npending = 0;
+		beeps_begin(b);
 	}
 }
 
@@ -788,9 +884,11 @@ static void update(void)
 			P.click = false;
 			if (b->kind == B_TEXT) {
 				double whole = b->t0 + stage_page_ms(&b->to, b->to_page);
-				if (now < whole)
+				if (now < whole) {
 					b->t0 = now - stage_page_ms(&b->to, b->to_page);   /* the page whole at once */
-				else if (b->wait) {
+					if (BP.beat == b)
+						BP.at = BP.n;   /* its letters with no sound, as the game draws them */
+				} else if (b->wait) {
 					b->clicked = true;
 					b->click_t = now;
 				}
@@ -840,6 +938,8 @@ static void update(void)
 			push_list(get(b->step, a ? "then" : "else"));
 			continue;
 		}
+		if (b->kind == B_TEXT)
+			beeps_tick(b, now);
 		double end = beat_end(b, now);
 		if (end >= 0 && now >= end) {
 			P.cur = b->to;

@@ -20,6 +20,12 @@ below were built and tried on the way; none of them was released.
   read), for a mod's own checks before its release.
 - `--check --dir` on a mod's folder takes the files the window lists, so its `mod.json` is no longer
   checked as a scene file.
+- ▶ and Play from here make the game's sounds as a line's letters come in: each face's pair from
+  the game's own table (a picture of the mod's gets the game's default pair, as in the game), in
+  turn and no closer than the table's wait, only inside quotes, none for narration, a page shown
+  at once or the letters a click shows whole. `--do printbeeps` prints them.
+- The "+" at a hovered step's foot adds a step after it again: the click was lost between the
+  press and the release, as the row stopped counting as hovered once the button was held.
 - `--help` names the bottom panel's Find, the keys and the values' types among the `--do` actions.
 - Built inside RQ MOD, the editor takes the engine's own scene checker and Rance Browser's readers,
   so the editor and the game check a file with the same file.

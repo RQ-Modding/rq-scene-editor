@@ -321,6 +321,123 @@ bool media_place(int no, int *x, int *y, const char **name)
 	return true;
 }
 
+/* ---- the faces' sounds ---- */
+
+/* The sounds a line makes as its letters come in, by its face, from the game's メッセージ効果音番号:
+ * switch (face) { case 2020: ...: t1 = 140; t2 = 140; return 903; ... default: t1 = 70; t2 = 70;
+ * return 901; }, the game then taking the sound and the one after it (T_MessageSound::create). A
+ * case that gives none: t1 = t2 = -1; return 0. Read from its code: the SWITCH's table, and in each
+ * case the references pushed (SH_LOCALREFREF 1 for t1, 3 for t2), the value each ASSIGN puts in,
+ * the value RETURN gives. */
+struct beep { int face, sound, t1, t2; };
+#define BEEPS_MAX 400
+static struct beep beeps[BEEPS_MAX], beep_default;
+static int nbeeps;
+static bool beeps_known;
+
+static bool beep_case(struct ain *ain, size_t p, struct beep *b)
+{
+	const uint8_t *c = ain->code;
+	int refs[4], nrefs = 0, last = 0;
+	b->sound = 0;
+	b->t1 = b->t2 = -1;
+	for (int n = 0; n < 32 && p + 2 <= ain->code_size; n++) {
+		int op = op_at(c + p);
+		if (op >= NR_OPCODES)
+			return false;
+		int width = instruction_width(op);
+		if (width <= 0 || p + (size_t)width > ain->code_size)
+			return false;
+		if (op == SH_LOCALREFREF) {
+			if (nrefs == 4)
+				return false;
+			refs[nrefs++] = at32(c + p + 2);
+		} else if (op == PUSH) {
+			last = at32(c + p + 2);
+		} else if (op == ASSIGN) {
+			if (!nrefs)
+				return false;
+			int r = refs[--nrefs];
+			if (r == 1)
+				b->t1 = last;
+			else if (r == 3)
+				b->t2 = last;
+		} else if (op == RETURN) {
+			b->sound = last;
+			return true;
+		} else if (op != POP) {
+			return false;
+		}
+		p += (size_t)width;
+	}
+	return false;
+}
+
+static void beeps_read(struct ain *ain)
+{
+	nbeeps = 0;
+	beeps_known = false;
+	char name[] = "\xE3\x83\xA1\xE3\x83\x83\xE3\x82\xBB\xE3\x83\xBC\xE3\x82\xB8\xE5\x8A\xB9\xE6\x9E\x9C\xE9\x9F\xB3\xE7\x95\xAA\xE5\x8F\xB7";   /* メッセージ効果音番号 */
+	int fn = ain_get_function(ain, name);
+	if (fn < 0)
+		return;
+	const uint8_t *c = ain->code;
+	size_t p = (size_t)ain->functions[fn].address;
+	for (int n = 0; n < 4 && p + 6 <= ain->code_size; n++) {
+		int op = op_at(c + p);
+		if (op >= NR_OPCODES || op == ENDFUNC)
+			return;
+		if (op == SWITCH) {
+			int s = at32(c + p + 2);
+			if (s < 0 || s >= ain->nr_switches)
+				return;
+			struct ain_switch *sw = &ain->switches[s];
+			if (sw->default_address < 0 || !beep_case(ain, (size_t)sw->default_address, &beep_default))
+				return;
+			for (int k = 0; k < sw->nr_cases && nbeeps < BEEPS_MAX; k++) {
+				struct beep *b = &beeps[nbeeps];
+				if (sw->cases[k].address < 0 || !beep_case(ain, (size_t)sw->cases[k].address, b))
+					return;
+				b->face = sw->cases[k].value;
+				nbeeps++;
+			}
+			beeps_known = true;
+			return;
+		}
+		int width = instruction_width(op);
+		if (width <= 0)
+			return;
+		p += (size_t)width;
+	}
+}
+
+bool media_face_beep(int face, int sound[2], int wait[2])
+{
+	if (!beeps_known)
+		return false;
+	const struct beep *b = &beep_default;
+	if (face <= 0)
+		face = 0;
+	for (int i = 0; i < nbeeps; i++)
+		if (beeps[i].face == face) {
+			b = &beeps[i];
+			break;
+		}
+	/* What T_MessageSound::create takes: two sounds and two waits, none negative. */
+	if (b->sound <= 0 || b->t1 < 0 || b->t2 < 0)
+		return false;
+	sound[0] = b->sound;
+	sound[1] = b->sound + 1;
+	wait[0] = b->t1;
+	wait[1] = b->t2;
+	return true;
+}
+
+bool media_beeps_known(void)
+{
+	return beeps_known;
+}
+
 static void plates_load(void)
 {
 	for (int i = 0; i < PLATES; i++) {
@@ -328,6 +445,8 @@ static void plates_load(void)
 		plates[i] = NULL;
 	}
 	plates_read = false;
+	nbeeps = 0;
+	beeps_known = false;
 	if (!G.dir[0] || !G.code[0])
 		return;
 	char path[1400];
@@ -337,6 +456,7 @@ static void plates_load(void)
 	if (!ain)
 		return;
 	places_read(ain);
+	beeps_read(ain);
 	char name[] = "\xE9\xA1\x94\xE7\x99\xBB\xE9\x8C\xB2";   /* 顔登録 */
 	int fn = ain_get_function(ain, name);
 	int found = 0;
