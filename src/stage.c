@@ -420,11 +420,12 @@ static void lay(const char *page, float width, struct laid *L)
 	}
 }
 
-/* A page as the game shows it: its box draws a typed apostrophe as a closing quote (’), as the
- * game's shots show it ("game’s"), though the font's own apostrophe is straight. In a buffer of
- * its own, kept until the next call. */
+/* A page as the game shows it: its {name}s with the values for Play, {{ and }} as braces, and a
+ * typed apostrophe as a closing quote (’), as the game's shots show it ("game’s"), though the
+ * font's own apostrophe is straight. In a buffer of its own, kept until the next call. */
 static const char *as_shown(const char *page)
 {
+	page = values_fill(page);
 	static char *buf;
 	static size_t cap;
 	size_t n = 0;
@@ -580,7 +581,7 @@ static void message(const struct pen *P, const struct stage *s, int page)
 		bool game = false;
 		const char *name = s->line_name ? s->line_name : line_plate(s->line, s->cast, &game);
 		if (name && name[0])
-			plate(P, f->plate, name);
+			plate(P, f->plate, values_fill(name));
 	}
 	/* The face shows in frames 1 and 2 only: the game draws none in the E frames. */
 	const cJSON *face = talk && fno <= 2 && !s->face_off ? line_face(s->line, s->cast) : NULL;
@@ -792,7 +793,7 @@ static void menu(const struct pen *P, const cJSON *choice, int hover)
 			hits.h[hits.n] = (float)bh;
 			hits.n++;
 		}
-		const char *text = row_text(r);
+		const char *text = values_fill(row_text(r));
 		int cr = 196, cg = 196, cb = 196;
 		const cJSON *jr = get(r, "r"), *jg = get(r, "g"), *jb = get(r, "b");
 		if (cJSON_IsNumber(jr) || cJSON_IsNumber(jg) || cJSON_IsNumber(jb)) {

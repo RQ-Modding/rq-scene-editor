@@ -64,8 +64,12 @@ static void usage(void)
 	       "      end:VALUE (the selected row), label=NAME (its go-tos with it), printstep,\n"
 	       "      printfile; the bottom panel: panel=problems|log|logall, printproblems,\n"
 	       "      goproblem=N (the Nth problem clicked), logfile=PATH (another file as the game's log),\n"
-	       "      printlog, loglink=N (the log's Nth line clicked); frame: the actions after it wait\n"
-	       "      for a frame drawn\n"
+	       "      printlog, loglink=N (the log's Nth line clicked); the game (not asked in a shot\n"
+	       "      until one of these): game, pipe=NAME (another pipe), gameplay, gamefrom (Play from\n"
+	       "      the selected step), gamestop, gamewait=STATE[:SECS] (off, ready, functions,\n"
+	       "      notloaded, otherdir, old, idle, waiting, playing, place=PLACE, refused; 15 s),\n"
+	       "      printgame, value=NAME=TEXT (a value for Play), printvalues; frame: the actions\n"
+	       "      after it wait for a frame drawn\n"
 	       "  " APP_EXE " --selftest FILE\n"
 	       "      edits, undo, saving and changes on disk, tried on FILE (a copy: it is written)\n"
 	       "  " APP_EXE " --mixer-check [--game DIR]\n"
@@ -263,15 +267,20 @@ static void core_message(const char *text)
 }
 
 /* The --do actions from `from` up to a "frame" (the rest wait for a frame drawn); where the next
- * ones start. */
+ * ones start. An action that waits (gamewait) is done again at the next frame. */
 static int run_dos(int from, int *failed)
 {
 	for (int i = from; i < A.ndo; i++) {
 		if (!strcmp(A.dos[i], "frame"))
 			return i + 1;
+		UI.do_again = false;
 		if (!ui_do(A.dos[i])) {
 			fprintf(stderr, APP_EXE ": --do %s did nothing\n", A.dos[i]);
 			(*failed)++;
+		}
+		if (UI.do_again) {
+			UI.do_again = false;
+			return i;
 		}
 	}
 	return A.ndo;

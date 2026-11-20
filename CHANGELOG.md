@@ -2,6 +2,37 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 0.8.0 (not released)
+
+Play in the game: the file played in the running game, values for its `{name}`s, the mod's
+functions.
+
+- **Play, From here, Stop.** With the game running RQ MOD, the top bar's **▶ Play** saves the file
+  and the game plays it from its first step; **▶ From here** plays it from the selected step (a
+  row: its choice); **■ Stop** ends it at its next step, after the click it waits for. The editor
+  speaks RQ MOD's pipe as `rqmod-ctl` does (`playscene`, `playscene status`, `playscene stop`,
+  `scenefunctions`, `mods`), on a thread of its own, a little every few seconds, and waits its turn
+  when another program has the pipe.
+- **The step the game plays** is lit in the list as the scene goes on (a folded branch opens, the
+  list follows it), and a pill beside the buttons says what the game does: not running, RQ MOD's
+  version, the mod not loaded or loaded from another folder, a scene waiting to start or playing
+  at a step (a click selects it), stopping, paused. Play says why it cannot play when it cannot.
+- **Values for Play.** Cast and file lists each `{name}` of the file with the value Play gives it
+  (sent with the file, as the mod's `vars` would be) and the choice or call that sets it in the
+  scene. The values are kept per mod and file; the stage shows them in the lines, the name plates
+  and the menu's rows, as the game fills them (`{{` and `}}` as braces), and says under it which
+  ones the step uses. A `{name}` given a value is no longer warned of.
+- **The mod's functions.** With the game running the mod from this folder, the editor asks it
+  which functions the mod names for its scene files, and RQ MOD's checker gets them: a call to
+  another is a problem, as in the game. Cast and file lists the file's calls with each one's place
+  and whether the mod names it.
+- **What the game refuses** when Play sends a file (a mod's own id that is not there, say) is
+  listed in Problems with "(the game)" until the file changes.
+- **For checks and agents,** `--do game`, `pipe=NAME`, `gameplay`, `gamefrom`, `gamestop`,
+  `gamewait=STATE[:SECS]` (an action that waits for the game, done again each frame),
+  `printgame`, `value=NAME=TEXT` and `printvalues`. A shot asks the game nothing unless one of
+  them does.
+
 ## 0.7.0 (not released)
 
 Problems: RQ MOD's own checker in the editor, the game's message box, the game's log.

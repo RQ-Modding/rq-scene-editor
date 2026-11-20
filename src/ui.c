@@ -1,9 +1,10 @@
-/* The window: the top bar (the mod, the file, Save, Undo, Redo, the look), the scene files and the
- * file's labels on the left, the steps in the middle (a list, its nested lists as a tree), the
- * selected step on the right, and the problems and a status line at the bottom.
+/* The window: the top bar (the mod, the file, Save, Undo, Redo, Play in the game, the look), the
+ * scene files and the file's labels on the left, the steps in the middle (a list, its nested lists
+ * as a tree), the selected step on the right, and the problems and a status line at the bottom.
  *
  * Until each kind of step has its own fields, the right side edits a step as the JSON the file
  * holds; every change is a step to undo, and the file is written in the editor's layout. */
+#include <ctype.h>
 #include <float.h>
 #include <math.h>
 #include <stdarg.h>
@@ -25,7 +26,7 @@ static int doc_gen;             /* a new file or a reload: the right side fills 
 static double next_scan, next_watch;
 
 /* What a press waits for when the open file has unsaved changes. */
-enum { P_NONE, P_FILE, P_MOD, P_QUIT, P_NEW, P_GAME };
+enum { P_NONE, P_FILE, P_MOD, P_QUIT, P_NEW, P_GAME, P_PLAY };
 static int pending;
 static char pending_arg[1600];
 
@@ -56,6 +57,14 @@ static int last_problem_count;
 
 static char new_name[80];
 static char new_why[160];
+
+/* The step the game plays in the open file (Play in the game), and whether it moved this frame. */
+static char game_lit[256];
+static bool game_lit_new;
+
+static const char *play_sel(char *out, size_t n);
+static void game_go(bool from_here);
+static void game_send(const char *from);
 
 /* ---- small helpers ---- */
 
@@ -350,6 +359,8 @@ static void rescan(void)
 void ui_init(const char *game, const char *mod_dir, const char *mod, const char *file, const char *select)
 {
 	snprintf(game_dir, sizeof game_dir, "%s", game);
+	if (UI.shot)
+		game_enable(false);   /* a shot shows the game only when an action asks for it */
 	snprintf(game_title, sizeof game_title, "%s", G.title[0] ? G.title : "Rance Quest Magnum");
 	const char *outside = mod_dir ? mod_dir : (UI.shot ? NULL : settings_get("mod_dir"));
 	mods_scan(game_dir, outside);
@@ -405,6 +416,9 @@ static void do_pending(int what, const char *arg)
 			UI.quit = true;
 		else
 			ui_error("Could not start the editor again on that game");
+		break;
+	case P_PLAY:   /* saved in the editor's layout: now to the game */
+		game_send(arg);
 		break;
 	}
 }
@@ -855,6 +869,78 @@ static void mod_combo(void)
 	}
 }
 
+/* A button's tip, also while it is greyed out (why it cannot be pressed). */
+static void tip_always(const char *text)
+{
+	if (igIsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
+		igSetTooltip("%s", text);
+}
+
+static const char *game_blocked(char *why, size_t n);
+
+/* The game's state in the top bar: a dot and a few words; a click on "Playing" selects the step. */
+static void game_pill_draw(float w)
+{
+	char text[300], tip[900];
+	int c = C_FAINT;
+	game_pill(text, sizeof text, &c, tip, sizeof tip);
+	if (w < S(60))
+		return;
+	float h = igGetFrameHeight(), size = fs(14);
+	char cut[300];
+	const char *t = fit(F_UI, size, text, w - S(30), cut, sizeof cut);
+	float pw = text_w(F_UI, size, t) + S(30);
+	V2 p = igGetCursorScreenPos();
+	bool hit = igInvisibleButton("##gamepill", v2(pw, h), 0);
+	if (tip[0] || t != text) {
+		if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+			igSetTooltip("%s%s%s", t != text ? text : "", t != text && tip[0] ? "\n" : "", tip);
+	}
+	ImDrawList *dl = igGetWindowDrawList();
+	ImDrawList_AddRectFilled(dl, p, v2(p.x + pw, p.y + h), col_a(c, c == C_FAINT ? 0.06f : 0.13f), h / 2, 0);
+	ImDrawList_AddRect(dl, p, v2(p.x + pw, p.y + h), col_a(c, c == C_FAINT ? 0.35f : 0.55f), h / 2, S(1), 0);
+	ImDrawList_AddCircleFilled(dl, v2(p.x + S(13), p.y + h / 2), S(3.5f), col(c), 12);
+	ImDrawList_AddText_FontPtr(dl, F_UI, size, v2(p.x + S(22), p.y + (h - size) / 2 - S(1)),
+	                           col(c == C_FAINT || c == C_OK ? C_DIM : c), t, NULL, 0, NULL);
+	if (hit && game_lit[0]) {
+		select_place(game_lit, true);
+		want_mid_tab = 0;
+	}
+}
+
+/* Play, From here and Stop for the game running, and its pill: up to x (the window's own). */
+static void game_buttons(float right)
+{
+	igSameLine(0, S(18));
+	char why[600];
+	bool blocked = game_blocked(why, sizeof why)[0] != 0;
+	igBeginDisabled(blocked);
+	if (igButton("\xE2\x96\xB6  Play##gameplay", v2(0, 0)))
+		game_go(false);
+	igEndDisabled();
+	tip_always(blocked ? why : "Saves the file and plays it in the game from its first step, with the values for Play "
+	                           "(Cast and file). The mod's functions and the game's commands run for real.");
+	igSameLine(0, S(6));
+	bool has_sel = D.root && UI.sel[0] && (sel_step(NULL, NULL) || sel_row(NULL, NULL));
+	igBeginDisabled(blocked || !has_sel);
+	if (igButton("\xE2\x96\xB6  From here##gamefrom", v2(0, 0)))
+		game_go(true);
+	igEndDisabled();
+	tip_always(blocked ? why : !has_sel ? "Select a step: the game plays from it" :
+	           "Saves the file and plays it in the game from the selected step (a row: its choice), with the "
+	           "values for Play");
+	igSameLine(0, S(6));
+	bool can_stop = game_state() == GAME_READY && game_scene() && !game_stopping();
+	igBeginDisabled(!can_stop);
+	if (igButton("\xE2\x96\xA0  Stop##gamestop", v2(0, 0)))
+		game_stop();
+	igEndDisabled();
+	tip_always(can_stop ? "Stops the scene the game plays: it ends at its next step, after the click it waits for"
+	                    : "Nothing plays in the game");
+	igSameLine(0, S(12));
+	game_pill_draw(right - igGetCursorPosX());
+}
+
 static void top_bar(float h)
 {
 	igPushStyleVar_Vec2(ImGuiStyleVar_WindowPadding, v2(S(12), (h - igGetFrameHeight()) / 2));
@@ -910,6 +996,7 @@ static void top_bar(float h)
 	igSetItemTooltip("Redo (Ctrl+Y)");
 
 	float right = igGetWindowWidth() - S(12) - S(54);
+	game_buttons(right - S(12));
 	igSameLine(right, 0);
 	look_switch();
 	igEndChild();
@@ -1293,6 +1380,14 @@ static void step_row(cJSON *st, const char *place, int index, int depth, const c
 				igSetScrollHereY(0.4f);
 		}
 	}
+	/* The step the game plays (Play in the game): lit, and the list brought to it when it moves on. */
+	if (game_lit[0] && !strcmp(game_lit, place)) {
+		ImDrawList_AddRectFilled(dl, p, b, col_a(C_PLAY, 0.16f), S(3), 0);
+		ImDrawList_AddRectFilled(dl, p, v2(p.x + S(3), b.y), col(C_PLAY), 0, 0);
+		ImDrawList_AddText_FontPtr(dl, F_UI, fs(12), v2(p.x + S(7), p.y + (h - fs(12)) / 2), col(C_PLAY), "\xE2\x96\xB6", NULL, 0, NULL);
+		if (game_lit_new && !igIsRectVisible_Vec2(p, b))
+			igSetScrollHereY(0.4f);
+	}
 	char num[16];
 	snprintf(num, sizeof num, "%d", index);
 	float nsize = fs(12.5f);
@@ -1445,6 +1540,10 @@ static bool branch_row(const char *id, int depth, const char *label, const char 
 	bool open = ImGuiStorage_GetBool(store, key, true);
 	if (!open && UI.scroll_to_sel && list && !strncmp(UI.sel, list, strlen(list)) && UI.sel[strlen(list)] == '[') {
 		open = true;   /* a step inside it selected from elsewhere (a problem, a go-to, a label) */
+		ImGuiStorage_SetBool(store, key, open);
+	}
+	if (!open && game_lit_new && list && !strncmp(game_lit, list, strlen(list)) && game_lit[strlen(list)] == '[') {
+		open = true;   /* the game plays a step inside it */
 		ImGuiStorage_SetBool(store, key, open);
 	}
 	float h = S(26);
@@ -1689,6 +1788,187 @@ static void cast_remove(const char *key)
 	cast_sel[0] = 0;
 }
 
+/* The {name}s of the file and the value Play gives each, and where the file sets them. */
+static void values_table(void)
+{
+	static struct value_name names[128];
+	int n = values_names(NULL, names, 128);
+	section("Values for Play", "\xC2\xB7 {name} in the lines");
+	if (!n) {
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_FAINT), "No {name} in this file. A line shows a value the mod gives the scene with {name} "
+		              "(rq.scene.file's vars), or one a choice or a call sets with \"into\".");
+		igPopTextWrapPos();
+		return;
+	}
+	if (igBeginTable("##values", 3, ImGuiTableFlags_BordersInnerH, v2(0, 0), 0)) {
+		igTableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.8f, 0);
+		igTableSetupColumn("Value Play gives", ImGuiTableColumnFlags_WidthStretch, 1.3f, 0);
+		igTableSetupColumn("Set in the scene by", ImGuiTableColumnFlags_WidthStretch, 1.1f, 0);
+		igPushStyleColor_Vec4(ImGuiCol_Text, colv(C_DIM));
+		igTableHeadersRow();
+		igPopStyleColor(1);
+		static char bufs[128][256], for_name[128][64];
+		static int active = -1;
+		for (int i = 0; i < n; i++) {
+			const struct value_name *v = &names[i];
+			igPushID_Str(v->name);
+			igTableNextRow(0, 0);
+			igTableNextColumn();
+			igAlignTextToFramePadding();
+			igPushFont(F_MONO, MONO_SIZE);
+			igText("{%s}", v->name);
+			igPopFont();
+			if (igIsItemHovered(ImGuiHoveredFlags_DelayShort))
+				igSetTooltip("Used %d time%s, first at %s%s", v->uses, v->uses == 1 ? "" : "s", v->first[0] ? v->first : "-",
+				             v->checked ? "\nAn if checks it (\"var\")" : "");
+			igTableNextColumn();
+			if (active != i || strcmp(for_name[i], v->name)) {
+				const char *now = values_get(v->name);
+				snprintf(bufs[i], sizeof bufs[i], "%s", now ? now : "");
+				snprintf(for_name[i], sizeof for_name[i], "%s", v->name);
+			}
+			igSetNextItemWidth(-1);
+			const char *hint = v->set_by[0] ? "none: the scene sets it"
+			                 : v->checked && !values_get(v->name) && v->uses == 1 ? "none: its if finds it not set"
+			                 : "none: the line shows it as written";
+			if (igInputTextWithHint("##value", hint,
+			                        bufs[i], sizeof bufs[i], 0, NULL, NULL))
+				values_set(v->name, bufs[i]);
+			if (igIsItemActive())
+				active = i;
+			else if (active == i)
+				active = -1;
+			igTableNextColumn();
+			if (v->set_by[0]) {
+				const cJSON *st = D.root ? place_find(D.root, v->set_by, NULL, NULL) : NULL;
+				const char *kind = st ? step_kind(st) : NULL;
+				char label[320];
+				snprintf(label, sizeof label, "the %s at %s", kind && !strcmp(kind, "call") ? "call" : "choice", v->set_by);
+				igAlignTextToFramePadding();
+				if (igSelectable_Bool(label, false, 0, v2(0, 0))) {
+					select_place(v->set_by, true);
+					want_mid_tab = 0;
+				}
+				igSetItemTooltip("Its \"into\" sets {%s} from there on: what Play gives counts before it", v->name);
+			} else {
+				igAlignTextToFramePadding();
+				igTextColored(colv(C_FAINT), "nothing: the mod gives it");
+			}
+			igPopID();
+		}
+		igEndTable();
+	}
+	igPushFont(NULL, 14);
+	igPushTextWrapPos(0);
+	igTextColored(colv(C_FAINT), "Play sends these with the file, as the mod's rq.scene.file vars would; the stage "
+	              "shows them. A name with no value shows as written.");
+	igPopTextWrapPos();
+	igPopFont();
+}
+
+/* The call steps of the file: each function once, where it is first called, and how many times. */
+struct fn_use { char name[128]; char first[256]; int uses; };
+struct fn_uses { struct fn_use *u; int n, max; };
+
+static void fn_each(cJSON *st, const char *place, void *ud)
+{
+	struct fn_uses *fu = ud;
+	const char *kind = step_kind(st);
+	if (!kind || strcmp(kind, "call"))
+		return;
+	const cJSON *v = cJSON_GetObjectItemCaseSensitive(st, "call");
+	if (!cJSON_IsString(v))
+		return;
+	for (int i = 0; i < fu->n; i++)
+		if (!strcmp(fu->u[i].name, v->valuestring)) {
+			fu->u[i].uses++;
+			return;
+		}
+	if (fu->n == fu->max)
+		return;
+	struct fn_use *u = &fu->u[fu->n++];
+	snprintf(u->name, sizeof u->name, "%s", v->valuestring);
+	snprintf(u->first, sizeof u->first, "%s", place);
+	u->uses = 1;
+}
+
+static void functions_table(void)
+{
+	static struct fn_use uses[64];
+	struct fn_uses fu = { uses, 0, 64 };
+	cJSON *steps = doc_steps();
+	if (steps)
+		steps_each(steps, "steps", fn_each, &fu);
+	section("The mod's functions this file calls", NULL);
+	bool known = game_functions_known();
+	if (!fu.n) {
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_FAINT), "No call step. A call runs a function the mod names for its scene files with "
+		              "rq.scene.functions.");
+		igPopTextWrapPos();
+	} else if (igBeginTable("##functions", 3, ImGuiTableFlags_BordersInnerH, v2(0, 0), 0)) {
+		igTableSetupColumn("Function", ImGuiTableColumnFlags_WidthStretch, 0.9f, 0);
+		igTableSetupColumn("Used at", ImGuiTableColumnFlags_WidthStretch, 1.1f, 0);
+		igTableSetupColumn("In the game", ImGuiTableColumnFlags_WidthStretch, 1.2f, 0);
+		igPushStyleColor_Vec4(ImGuiCol_Text, colv(C_DIM));
+		igTableHeadersRow();
+		igPopStyleColor(1);
+		for (int i = 0; i < fu.n; i++) {
+			igPushID_Int(i);
+			igTableNextRow(0, 0);
+			igTableNextColumn();
+			igAlignTextToFramePadding();
+			igPushFont(F_MONO, MONO_SIZE);
+			igTextUnformatted(uses[i].name, NULL);
+			igPopFont();
+			igTableNextColumn();
+			char at[320];
+			if (uses[i].uses > 1)
+				snprintf(at, sizeof at, "%s and %d more", uses[i].first, uses[i].uses - 1);
+			else
+				snprintf(at, sizeof at, "%s", uses[i].first);
+			igAlignTextToFramePadding();
+			if (igSelectable_Bool(at, false, 0, v2(0, 0))) {
+				select_place(uses[i].first, true);
+				want_mid_tab = 0;
+			}
+			igTableNextColumn();
+			igAlignTextToFramePadding();
+			if (!known)
+				igTextColored(colv(C_FAINT), game_state() == GAME_OFF ? "the game is not running" : "the game cannot tell now");
+			else if (game_has_function(uses[i].name))
+				igTextColored(colv(C_OK), "\xE2\x9C\x93 named by %s", ui_mod_id());
+			else
+				igTextColored(colv(C_BAD), "\xE2\x9C\x97 not named: the game refuses the file");
+			igPopID();
+		}
+		igEndTable();
+	}
+	if (known) {
+		char list[700] = "";
+		size_t o = 0;
+		int n = game_function_count();
+		for (int i = 0; i < n && o < sizeof list; i++)
+			o += (size_t)snprintf(list + o, sizeof list - o, "%s%s", i ? ", " : "", game_function(i));
+		igPushFont(NULL, 14);
+		igPushTextWrapPos(0);
+		if (n)
+			igTextColored(colv(C_FAINT), "%s names %d function%s for its scene files: %s", ui_mod_id(), n, n == 1 ? "" : "s", list);
+		else
+			igTextColored(colv(C_FAINT), "%s names no function for its scene files (rq.scene.functions)", ui_mod_id());
+		igPopTextWrapPos();
+		igPopFont();
+	} else if (fu.n) {
+		igPushFont(NULL, 14);
+		igPushTextWrapPos(0);
+		igTextColored(colv(C_FAINT), "With the game running this mod from this folder, the editor asks it which functions "
+		              "the mod names, and a call to another is a problem, as in the game.");
+		igPopTextWrapPos();
+		igPopFont();
+	}
+}
+
 static void cast_tab(void)
 {
 	const cJSON *cast = cJSON_GetObjectItemCaseSensitive(D.root, "cast");
@@ -1774,6 +2054,10 @@ static void cast_tab(void)
 		cast_add();
 	igEndDisabled();
 	igSetItemTooltip("A name for a face, for the lines to use");
+	igSpacing();
+	values_table();
+	igSpacing();
+	functions_table();
 	igSpacing();
 	section("The file", NULL);
 	cJSON *once = cJSON_GetObjectItemCaseSensitive(D.root, "once");
@@ -1931,6 +2215,60 @@ static void fill_edit(void)
 	edit_gen = doc_gen;
 }
 
+/* The {name}s with a value for Play in a text, added to out once each: "{item} = Iron Sword". */
+static void note_names(const char *s, char *out, size_t n)
+{
+	for (const char *p = s ? s : ""; *p; p++) {
+		if (p[0] == '{' && p[1] == '{') {
+			p++;
+			continue;
+		}
+		if (*p != '{' || !(isalpha((unsigned char)p[1]) || p[1] == '_'))
+			continue;
+		const char *a = p + 1, *e = a;
+		while (isalnum((unsigned char)*e) || *e == '_')
+			e++;
+		if (*e != '}' || e - a >= 64)
+			continue;
+		char name[64], item[400];
+		snprintf(name, sizeof name, "%.*s", (int)(e - a), a);
+		const char *v = values_get(name);
+		p = e;
+		if (!v)
+			continue;
+		snprintf(item, sizeof item, "{%s} = %s", name, v);
+		if (strstr(out, item))
+			continue;
+		size_t o = strlen(out);
+		snprintf(out + o, n - o, "%s%s", o ? ", " : "", item);
+	}
+}
+
+/* Under the stage: the values for Play the line or the menu on show uses. */
+static void values_note(const struct stage *sg, int page)
+{
+	char note[600] = "";
+	if (sg->line && !sg->choice) {
+		note_names(line_page(sg->line, page), note, sizeof note);
+		bool game = false;
+		note_names(line_plate(sg->line, sg->cast, &game), note, sizeof note);
+	}
+	const cJSON *rows = sg->choice ? cJSON_GetObjectItemCaseSensitive(sg->choice, "choice") : NULL;
+	for (const cJSON *r = cJSON_IsArray(rows) ? rows->child : NULL; r; r = r->next) {
+		const cJSON *t = cJSON_IsObject(r) ? cJSON_GetObjectItemCaseSensitive(r, "text") : r;
+		note_names(cJSON_IsString(t) ? t->valuestring : NULL, note, sizeof note);
+	}
+	if (!note[0])
+		return;
+	char line[700], cut[700];
+	snprintf(line, sizeof line, "With the values for Play: %s", note);
+	igPushFont(NULL, 14);
+	igTextColored(colv(C_DIM), "%s", fit(F_UI, fs(14), line, igGetContentRegionAvail().x - S(8), cut, sizeof cut));
+	igPopFont();
+	if (igIsItemHovered(ImGuiHoveredFlags_DelayShort) && cut[0] && strcmp(cut, line))
+		igSetTooltip("%s", line);
+}
+
 /* The stage's foot: what is on each layer, and the page shown with its arrows. */
 static void stage_foot(const struct stage *sg, bool own_line, int *page)
 {
@@ -1980,6 +2318,7 @@ static void stage_foot(const struct stage *sg, bool own_line, int *page)
 		if (!own_line && igIsItemHovered(0))
 			igSetTooltip("The line's pages: the box shows its last page until the next line");
 	}
+	values_note(sg, *page);
 }
 
 /* What ▶ and Play from here start at: the selected step, or a selected row's choice. */
@@ -1990,6 +2329,110 @@ static const char *play_sel(char *out, size_t n)
 	else
 		snprintf(out, n, "%s", UI.sel);
 	return out;
+}
+
+/* ---- Play in the game ---- */
+
+/* Why Play cannot send the open file to the game now, or "". */
+static const char *game_blocked(char *why, size_t n)
+{
+	why[0] = 0;
+	if (!D.open) {
+		snprintf(why, n, "Open a scene file first");
+		return why;
+	}
+	if (!D.root) {
+		snprintf(why, n, "RQ MOD cannot read this file: %s", D.why);
+		return why;
+	}
+	if (D.readonly) {
+		snprintf(why, n, "The editor does not write this file: %s", D.why);
+		return why;
+	}
+	const struct problems *ps = problems_now();
+	if (ps->errors) {
+		snprintf(why, n, "RQ MOD does not play this file: %d problem%s to fix first (Problems)", ps->errors,
+		         ps->errors == 1 ? "" : "s");
+		return why;
+	}
+	int st = game_state();
+	if (st != GAME_READY) {
+		char pill[300], tip[900];
+		int c;
+		game_pill(pill, sizeof pill, &c, tip, sizeof tip);
+		snprintf(why, n, "%s%s%s", pill, tip[0] ? ". " : "", tip);
+	} else if (game_paused()) {
+		snprintf(why, n, "The game is paused (rqmod-ctl pause): Play waits for rqmod-ctl resume");
+	} else if (game_scene()) {
+		snprintf(why, n, "A scene plays in the game, or waits to start: Stop it first");
+	}
+	return why;
+}
+
+/* What the game is asked to play, once the file is saved. */
+static void game_send(const char *from)
+{
+	char why[600];
+	if (!game_play(from && from[0] ? from : NULL, problems_doc_hash(), why, sizeof why))
+		ui_error("Play: %s", why);
+}
+
+/* Play and From here: the file saved first (what plays is what is on disk). */
+static void game_go(bool from_here)
+{
+	char why[600];
+	if (game_blocked(why, sizeof why)[0]) {
+		ui_error("Play: %s", why);
+		return;
+	}
+	char from[256] = "";
+	if (from_here) {
+		play_sel(from, sizeof from);
+		if (!from[0] || !place_exists(D.root, from)) {
+			ui_error("Play from here: select a step first");
+			return;
+		}
+	}
+	if (doc_dirty()) {
+		if (UI.shot) {
+			ui_error("Play: the file has changes not saved, and a shot writes nothing");
+			return;
+		}
+		if (!D.styled) {
+			/* The layout's notice first; its Save goes on to the game. */
+			pending = P_PLAY;
+			snprintf(pending_arg, sizeof pending_arg, "%s", from);
+			modal_open = M_LAYOUT;
+			return;
+		}
+		if (!really_save())
+			return;
+	}
+	game_send(from);
+}
+
+static const char *const game_state_names[] = { "looking", "off", "silent", "old", "notloaded", "otherdir", "ready" };
+
+/* --do gamewait=STATE: whether the game is there yet. */
+static bool game_is(const char *what)
+{
+	int st = game_state();
+	if (!strncmp(what, "place=", 6))
+		return !strcmp(game_lit, what + 6);
+	if (!strcmp(what, "functions"))
+		return game_functions_known();
+	if (!strcmp(what, "idle"))
+		return st == GAME_READY && !game_scene() && !game_paused();
+	if (!strcmp(what, "waiting"))
+		return st == GAME_READY && game_scene() == 1;
+	if (!strcmp(what, "playing"))
+		return st == GAME_READY && game_scene() == 2;
+	if (!strcmp(what, "refused"))
+		return D.open && game_refusal(ui_mod_id(), D.rel, problems_doc_hash(), NULL, 0) > 0;
+	for (int i = 0; i < (int)(sizeof game_state_names / sizeof game_state_names[0]); i++)
+		if (!strcmp(what, game_state_names[i]))
+			return st == i;
+	return false;
 }
 
 /* The stage's heading: the game's screen at the step, and its buttons to play it. */
@@ -2960,6 +3403,96 @@ bool ui_do(const char *action)
 	} else if (!strcmp(name, "loglink")) {   /* loglink=N: the log tab's Nth line clicked (one that names a place) */
 		gamelog_poll(0, true);
 		return log_click(atoi(arg));
+	} else if (!strcmp(name, "game")) {   /* the game asked for: a shot does not ask it otherwise */
+		game_enable(true);
+	} else if (!strcmp(name, "pipe")) {   /* pipe=NAME: another pipe than rqmod's */
+		pipe_set_name(arg);
+		game_enable(true);
+	} else if (!strcmp(name, "gameplay") || !strcmp(name, "gamefrom")) {   /* Play, From here */
+		/* While the editor looks for the game (10 s at most), the action waits. */
+		static double looking_until;
+		static bool looking;
+		game_enable(true);
+		if (game_state() == GAME_LOOKING) {
+			if (!looking) {
+				looking = true;
+				looking_until = igGetTime() + 10;
+			}
+			if (igGetTime() < looking_until) {
+				UI.do_again = true;
+				return true;
+			}
+		}
+		looking = false;
+		char why[600];
+		if (game_blocked(why, sizeof why)[0]) {
+			printf("%s: %s\n", name, why);
+			fflush(stdout);
+			return false;
+		}
+		game_go(name[4] == 'f');
+		return game_scene() != 0;
+	} else if (!strcmp(name, "gamestop")) {
+		if (game_state() != GAME_READY || !game_scene())
+			return false;
+		game_stop();
+	} else if (!strcmp(name, "gamewait")) {   /* gamewait=STATE[:SECS]: the next actions wait for it */
+		static char waiting_for[300];
+		static double until;
+		game_enable(true);
+		char what[300];
+		snprintf(what, sizeof what, "%s", arg);
+		double secs = 15;
+		char *colon = strrchr(what, ':');
+		if (colon && colon[1] && strspn(colon + 1, "0123456789.") == strlen(colon + 1)) {
+			secs = atof(colon + 1);
+			*colon = 0;
+		}
+		if (strcmp(waiting_for, arg)) {
+			snprintf(waiting_for, sizeof waiting_for, "%s", arg);
+			until = igGetTime() + secs;
+		}
+		if (game_is(what)) {
+			waiting_for[0] = 0;
+			return true;
+		}
+		if (igGetTime() > until) {
+			waiting_for[0] = 0;
+			printf("gamewait %s: not in %g s (the game: %s)\n", what, secs, game_state_names[game_state()]);
+			fflush(stdout);
+			return false;
+		}
+		UI.do_again = true;
+	} else if (!strcmp(name, "printgame")) {   /* the game as the editor sees it, on stdout */
+		char pill[300], tip[900];
+		int c;
+		game_pill(pill, sizeof pill, &c, tip, sizeof tip);
+		char why[600];
+		game_blocked(why, sizeof why);
+		printf("game %s version=%s scene=%d place=%s functions=%d paused=%d refused=%d\npill %s\nplay %s\n",
+		       game_state_names[game_state()], game_version()[0] ? game_version() : "-", game_scene(),
+		       game_lit[0] ? game_lit : "-", game_functions_known() ? game_function_count() : -1, game_paused() ? 1 : 0,
+		       D.open ? game_refusal(ui_mod_id(), D.rel, problems_doc_hash(), NULL, 0) : 0, pill, why[0] ? why : "ok");
+		for (int i = 0; game_functions_known() && i < game_function_count(); i++)
+			printf("function %s\n", game_function(i));
+		fflush(stdout);
+	} else if (!strcmp(name, "value")) {   /* value=NAME=TEXT: the value Play gives {NAME} (TEXT "": none) */
+		const char *e = strchr(arg, '=');
+		if (!e || e == arg || e - arg >= 64)
+			return false;
+		char nm[64];
+		snprintf(nm, sizeof nm, "%.*s", (int)(e - arg), arg);
+		values_set(nm, e + 1);
+		return true;
+	} else if (!strcmp(name, "printvalues")) {   /* the file's {name}s and their values for Play, on stdout */
+		static struct value_name vn[128];
+		int n = values_names(NULL, vn, 128);
+		printf("values %d\n", n);
+		for (int i = 0; i < n; i++) {
+			const char *v = values_get(vn[i].name);
+			printf("{%s} | %s | %s | %d\n", vn[i].name, v ? v : "-", vn[i].set_by[0] ? vn[i].set_by : "-", vn[i].uses);
+		}
+		fflush(stdout);
 	} else if (!strcmp(name, "goproblem")) {   /* goproblem=N: the Nth problem clicked */
 		const struct problems *ps = problems_now();
 		int i = atoi(arg);
@@ -3057,6 +3590,11 @@ void ui_frame(void)
 	if (!log_override)
 		gamelog_set_game(game_dir);
 	gamelog_poll(igGetTime(), false);
+	struct mod *gm = mod_now();
+	game_frame(now, gm ? gm->id : NULL, gm ? gm->dir : NULL, D.open ? D.rel : NULL);
+	const char *gp = D.open && gm ? game_place_for(gm->id, D.rel) : NULL;
+	game_lit_new = strcmp(game_lit, gp ? gp : "") != 0;
+	snprintf(game_lit, sizeof game_lit, "%s", gp ? gp : "");
 
 	igSetNextWindowPos(v2(0, 0), ImGuiCond_Always, v2(0, 0));
 	igSetNextWindowSize(io->DisplaySize, ImGuiCond_Always);

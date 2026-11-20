@@ -4,9 +4,11 @@
  * the build) in a Lua 5.4 of the editor's own, on the file's JSON turned into Lua as the loader
  * turns it (a whole number an integer, an array with the checker's metatable, null its sentinel).
  * The names of the game's quests, characters and items come from RQ MOD's names (rq.ids, through
- * Rance Browser's readers) with the loader's rules; a mod's own id ("mymod:thing") and the mod's
- * functions are known only with the game running, so they pass here. A picture's file is looked
- * for in the mod's folder. What the checker finds, RQ MOD refuses: the file does not play.
+ * Rance Browser's readers) with the loader's rules. The mod's functions come from the game while it
+ * runs the mod from this folder (scenefunctions); without the game a call passes here, as does a
+ * mod's own id ("mymod:thing"), which only the game knows: what it refused when Play sent the file
+ * is added to the file's problems until the file changes. A picture's file is looked for in the
+ * mod's folder. What the checker finds, RQ MOD refuses: the file does not play.
  *
  * The editor's own warnings come from the game's box: a page longer than the box holds, a letter
  * the game's font cannot draw, and a {name} no step of the file sets. The game plays such a file,
@@ -32,6 +34,8 @@ static int check_ref = LUA_NOREF, null_ref = LUA_NOREF, array_ref = LUA_NOREF;
 static char load_why[300];
 static const char *mod_dir_now;
 bool problems_box;
+/* The file being checked, for its values for Play (a {name} given one is not warned of). */
+static const char *vals_mod, *vals_rel;
 
 /* ---- the checker in Lua ---- */
 
@@ -362,6 +366,15 @@ static void run_checker(const cJSON *root, const char *mod_dir, struct problems 
 		lua_pushcfunction(L, l_file_exists);
 		lua_setfield(L, -2, "file_exists");
 	}
+	if (game_functions_known()) {
+		/* The mod's functions as the game has them: a call to another is a problem, as in the game. */
+		lua_newtable(L);
+		for (int i = 0, n = game_function_count(); i < n; i++) {
+			lua_pushboolean(L, 1);
+			lua_setfield(L, -2, game_function(i));
+		}
+		lua_setfield(L, -2, "functions");
+	}
 	if (lua_pcall(L, 2, 1, 0) != LUA_OK) {
 		addf(ps, PROB_ERROR, "", "RQ MOD's checker stopped: %s", lua_tostring(L, -1));
 		lua_settop(L, 0);
@@ -514,7 +527,10 @@ static void values(struct walk *w, const char *place, const char *what, const ch
 		if (*b != '}')
 			continue;
 		size_t len = (size_t)(b - a);
-		if (!name_set(&w->set, a, len) && !name_set(&told, a, len)) {
+		char nm[64];
+		snprintf(nm, sizeof nm, "%.*s", (int)(len < 63 ? len : 63), a);
+		bool given = vals_rel && values_get_for(vals_mod, vals_rel, nm);
+		if (!given && !name_set(&w->set, a, len) && !name_set(&told, a, len)) {
 			name_add(&told, a, len);
 			addf(w->ps, PROB_WARN, place, "%s: no step sets {%.*s} (no \"into\" names it): unless the mod gives it, "
 			     "the game shows \"{%.*s}\"", what, (int)len, a, (int)len, a);
@@ -650,6 +666,37 @@ static uint64_t now_hash;
 static double now_at;
 static bool now_box;
 static char now_path[1600];
+static unsigned now_gen;
+
+unsigned long long problems_doc_hash(void)
+{
+	return D.root ? hash(D.root, 14695981039346656037ULL) : 0;
+}
+
+/* What the game refused when Play sent the file as it is now: "scenes/a.json: steps[2]: what". */
+static void game_problems(struct problems *ps, uint64_t h)
+{
+	const char *line;
+	int n = game_refusal(ui_mod_id(), D.rel, h, &line, 0);
+	for (int i = 0; i < n; i++) {
+		game_refusal(ui_mod_id(), D.rel, h, &line, i);
+		const char *s = line;
+		size_t rl = strlen(D.rel);
+		if (!strncmp(s, D.rel, rl) && !strncmp(s + rl, ": ", 2))
+			s += rl + 2;
+		char at[256], place[256];
+		const char *msg;
+		split(s, at, sizeof at, &msg);
+		bool seen = false;
+		for (int k = 0; k < ps->n && !seen; k++)
+			seen = !strcmp(ps->p[k].at, at) && !strcmp(ps->p[k].msg, msg);
+		if (seen)
+			continue;
+		problem_place(at, place, sizeof place);
+		struct problem *p = add(ps, PROB_ERROR, at, place);
+		snprintf(p->msg, sizeof p->msg, "%s (the game)", msg);
+	}
+}
 
 const struct problems *problems_now(void)
 {
@@ -660,9 +707,16 @@ const struct problems *problems_now(void)
 	}
 	uint64_t h = hash(D.root, 14695981039346656037ULL);
 	double t = igGetTime();
-	/* Again when the file changes, and every few seconds for the pictures' files. */
-	if (h != now_hash || strcmp(now_path, D.path) || now_box != problems_box || t - now_at > 3.0 || t < now_at) {
+	unsigned g = game_gen() * 31u + values_gen();
+	/* Again when the file changes, the game's functions or the values for Play, and every few
+	 * seconds for the pictures' files. */
+	if (h != now_hash || strcmp(now_path, D.path) || now_box != problems_box || g != now_gen || t - now_at > 3.0 || t < now_at) {
+		vals_mod = ui_mod_id();
+		vals_rel = D.rel;
 		problems_check(D.root, media_mod_dir(), &now);
+		vals_mod = vals_rel = NULL;
+		game_problems(&now, h);
+		now_gen = g;
 		now_hash = h;
 		now_at = t;
 		now_box = problems_box;
@@ -694,7 +748,7 @@ int problems_at(const char *place, const struct problem **first)
 
 /* ---- each file of the list, from disk ---- */
 
-struct counted { char path[1600]; long long mtime, size; int errors, warnings; bool box; };
+struct counted { char path[1600]; long long mtime, size; int errors, warnings; bool box; unsigned gen; };
 static struct counted *counted;
 static int ncounted, capcounted;
 
@@ -706,7 +760,8 @@ void problems_count_file(const char *path, const char *mod_dir, long long mtime,
 			c = &counted[i];
 			break;
 		}
-	if (c && c->mtime == mtime && c->size == size && c->box == problems_box) {
+	unsigned g = game_gen() * 31u + values_gen();
+	if (c && c->mtime == mtime && c->size == size && c->box == problems_box && c->gen == g) {
 		*errors = c->errors;
 		*warnings = c->warnings;
 		return;
@@ -725,7 +780,14 @@ void problems_count_file(const char *path, const char *mod_dir, long long mtime,
 	size_t rawn = 0;
 	struct problems ps = { 0 };
 	if (scene_read(path, &root, &raw, &rawn, why, sizeof why)) {
+		/* Its values for Play: by its path in the mod's folder. */
+		size_t dl = mod_dir ? strlen(mod_dir) : 0;
+		if (dl && !strncmp(path, mod_dir, dl) && (path[dl] == '/' || path[dl] == '\\')) {
+			vals_mod = ui_mod_id();
+			vals_rel = path + dl + 1;
+		}
 		problems_check(root, mod_dir, &ps);
+		vals_mod = vals_rel = NULL;
 		c->errors = ps.errors;
 		c->warnings = ps.warnings;
 	} else {
@@ -738,6 +800,7 @@ void problems_count_file(const char *path, const char *mod_dir, long long mtime,
 	c->mtime = mtime;
 	c->size = size;
 	c->box = problems_box;
+	c->gen = g;
 	*errors = c->errors;
 	*warnings = c->warnings;
 }

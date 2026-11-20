@@ -151,6 +151,23 @@ void settings_set(const char *key, const char *value)
 	}
 }
 
+/* The settings as a whole, for a value that is more than a text (the values for Play). */
+cJSON *settings_tree(void)
+{
+	return settings_path[0] ? settings : NULL;
+}
+
+void settings_save(void)
+{
+	if (!settings || !settings_path[0])
+		return;
+	char *text = cJSON_Print(settings);
+	if (text) {
+		file_write(settings_path, (uint8_t *)text, strlen(text));
+		free(text);
+	}
+}
+
 static int CALLBACK folder_cb(HWND hwnd, UINT msg, LPARAM lp, LPARAM data)
 {
 	(void)lp;

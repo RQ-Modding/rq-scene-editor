@@ -462,6 +462,7 @@ void problems_count_file(const char *path, const char *mod_dir, long long mtime,
  * be known here (no names, or a mod's own id). */
 int problems_find_id(const char *kind, const char *name, char *why, size_t n);
 const char *problems_lua_why(void);   /* why RQ MOD's checker did not load, or NULL */
+unsigned long long problems_doc_hash(void);   /* the open file's JSON, as the problems see it */
 
 /* ---- the game's log (gamelog.c) ---- */
 
@@ -475,6 +476,75 @@ const char *gamelog_line(int i);
 unsigned gamelog_gen(void);                    /* changes when lines come or the log starts again */
 bool gamelog_for(const char *line, const char *mod);   /* a line of that mod */
 
+/* ---- the game's pipe (pipe.c): RQ MOD's \\.\pipe\rqmod, on a thread of its own ---- */
+
+enum { PIPE_ANSWER, PIPE_NO_GAME, PIPE_NO_ANSWER };
+
+struct pipe_answer {
+	int id, tag;
+	int how;       /* PIPE_*: an answer, no game has the pipe, or it stayed busy or broke */
+	char *text;    /* the answer without its last line end (malloc'd), or NULL */
+};
+
+/* A command queued (a line of RQ MOD's words): its id, or 0 when it is too long or the queue is
+ * full. Its answer comes back from pipe_take, in order. */
+int pipe_send(int tag, const char *line);
+bool pipe_take(struct pipe_answer *out);
+int pipe_waiting(void);
+size_t pipe_line_max(void);                 /* the longest line the game reads */
+void pipe_set_name(const char *name);       /* another pipe than rqmod (--do pipe=NAME) */
+
+/* ---- the game running (game.c): Play, Stop, the values for Play ---- */
+
+enum { GAME_LOOKING, GAME_OFF, GAME_SILENT, GAME_OLD, GAME_NO_MOD, GAME_OTHER_DIR, GAME_READY };
+
+/* Once a frame: the open mod (its id and folder) and file; asks the game a little at a time. */
+void game_frame(double now, const char *mod, const char *mod_dir, const char *rel);
+void game_enable(bool on);                  /* --shot: off until an action asks for the game */
+bool game_enabled(void);
+int game_state(void);                       /* GAME_* */
+const char *game_version(void);             /* RQ MOD's, "" until known */
+const char *game_mod_dir(void);             /* where the game runs the open mod from */
+const char *game_silent_why(void);
+bool game_paused(void);                     /* rqmod-ctl pause */
+int game_scene(void);                       /* 0 none, 1 a scene waits to start, 2 one plays */
+bool game_stopping(void);
+/* The step the game plays in a file (the place), or NULL. */
+const char *game_place_for(const char *mod, const char *rel);
+bool game_waiting_for(const char *mod, const char *rel);
+bool game_playing_now(const char **mod, const char **file, const char **place);
+/* Play the open file (saved): from a place or label (NULL: the top), with the values for Play;
+ * hash is the file's JSON as it is now, for what the game may refuse. */
+bool game_play(const char *from, unsigned long long hash, char *why, size_t n);
+void game_stop(void);
+/* The open mod's functions (rq.scene.functions), known while the game runs it from this folder. */
+bool game_functions_known(void);
+int game_function_count(void);
+const char *game_function(int i);
+bool game_has_function(const char *name);
+unsigned game_gen(void);                    /* changes with the functions and the game's refusals */
+/* The game's refusal of a file Play sent, for the file as it was: how many lines, and line i. */
+int game_refusal(const char *mod, const char *rel, unsigned long long hash, const char **line, int i);
+/* The pill in the top bar: its text, its colour (enum col) and its tip. */
+void game_pill(char *out, size_t n, int *colour, char *tip, size_t tn);
+
+/* The values Play gives a file's {name}s (kept in the settings per mod and file). */
+struct value_name {
+	char name[64];
+	char set_by[256];   /* the first choice or call whose "into" names it, or "" */
+	char first[256];    /* the first place that uses it */
+	int uses;           /* in lines, name plates, rows and conditions */
+	bool checked;       /* a condition checks it ("var") */
+};
+int values_names(const cJSON *root, struct value_name *out, int max);   /* root NULL: the open file */
+const char *values_get(const char *name);  /* the open file's, or NULL */
+const char *values_get_for(const char *mod, const char *rel, const char *name);
+void values_set(const char *name, const char *text);   /* "" or NULL takes it away */
+unsigned values_gen(void);
+/* A text as the game shows it with the values for Play: {name} filled, {{ and }} as braces, a name
+ * with no value as written (a static buffer, or s itself). */
+const char *values_fill(const char *s);
+
 /* ---- the window (ui.c) ---- */
 
 struct ui {
@@ -486,6 +556,7 @@ struct ui {
 	bool status_bad;
 	bool quit;              /* the window may close */
 	bool shot;              /* --shot: nothing written, no settings changed */
+	bool do_again;          /* --do: the action waits, and is done again next frame */
 };
 extern struct ui UI;
 
@@ -521,6 +592,8 @@ bool win_replace(const char *from, const char *to);   /* a file moved over anoth
 bool win_stat(const char *path, long long *mtime, long long *size);   /* mtime in 100 ns steps */
 const char *settings_get(const char *key);
 void settings_set(const char *key, const char *value);
+cJSON *settings_tree(void);                 /* the settings as a whole, or NULL */
+void settings_save(void);
 
 /* ---- --check and --format (check.c) ---- */
 

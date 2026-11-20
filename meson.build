@@ -11,7 +11,7 @@
 # with RQ MOD's own checker (scene_check.lua) in Lua 5.4 (third_party/lua): RQ MOD passes its own
 # copy with scene_check_lua; alone, the editor builds with data/scene_check.lua.
 project('rq-scene-editor', 'c', 'cpp',
-        version : '0.7.0',
+        version : '0.8.0',
         meson_version : '>= 0.59',
         default_options : ['c_std=c11', 'cpp_std=c++17', 'warning_level=1'])
 add_project_arguments('-D_DEFAULT_SOURCE', language : 'c')
@@ -43,7 +43,7 @@ executable('rq-scene-editor',
     ['src/main.c', 'src/look.c', 'src/json.c', 'src/doc.c', 'src/mods.c', 'src/ui.c',
      'src/steps.c', 'src/win.c', 'src/check.c', 'src/media.c', 'src/stage.c', 'src/fields.c',
      'src/fx.c', 'src/play.c', 'src/worldmap.c', 'src/flash.c', 'src/mixer.c', 'src/picker.c',
-     'src/cond.c', 'src/problems.c', 'src/gamelog.c', scene_check_c],
+     'src/cond.c', 'src/problems.c', 'src/gamelog.c', 'src/pipe.c', 'src/game.c', scene_check_c],
     c_args : c_warnings + [
               '-DEDITOR_VERSION="' + editor_version + '"',
               '-DEDITOR_BUILD_NOTE="' + build_note + '"'],
