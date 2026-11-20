@@ -84,6 +84,8 @@ jobs:
           mkdir -p $pkg/licenses/imgui $pkg/licenses/cimgui $pkg/licenses/lua $pkg/licenses/rance-browser
           cp build/rq-scene-editor.exe README.md CHANGELOG.md CREDITS.md COPYING $pkg/
           cp -r /mingw64/share/licenses/. $pkg/licenses/
+          # MSYS2 installs no license file for libvorbis and LAME, linked in through libsndfile.
+          cp -r licenses/. $pkg/licenses/
           cp subprojects/rance-browser/third_party/cimgui/imgui/LICENSE.txt $pkg/licenses/imgui/
           cp subprojects/rance-browser/third_party/cimgui/LICENSE $pkg/licenses/cimgui/
           cp subprojects/rance-browser/CREDITS.md subprojects/rance-browser/COPYING $pkg/licenses/rance-browser/

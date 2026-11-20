@@ -14,8 +14,11 @@ RQ Scene Editor is GPL-2.0-or-later (`COPYING`). It is built from these, each un
 | [Dear ImGui 1.92.9](https://github.com/ocornut/imgui) | Omar Cornut and contributors | MIT | through `rance_core` |
 | [cimgui 1.92.9b](https://github.com/cimgui/cimgui) | Stephan Dilly and contributors | MIT | through `rance_core` |
 | [SDL2](https://www.libsdl.org/) | Sam Lantinga and contributors | zlib | linked in |
-| [libsndfile](https://libsndfile.github.io/libsndfile/), with libogg, libvorbis, FLAC, Opus and mpg123 | their authors | LGPL-2.1-or-later and others | linked in, through `rance_core` |
+| [libsndfile](https://libsndfile.github.io/libsndfile/), with libogg, libvorbis, FLAC, Opus, mpg123 and LAME | their authors | LGPL-2.1-or-later and others | linked in, through `rance_core` |
 | libjpeg-turbo, libwebp, libpng, zlib, libdeflate | their authors | BSD-style, zlib, MIT | linked in, through libsys4 |
+
+The release zip has each library's license in `licenses/`. MSYS2 installs no license file for
+libvorbis and LAME, so this repository carries them in `licenses/`.
 
 How the editor reads a scene file (a byte-order mark skipped, the size limit, a field given twice,
 the depth limit and the messages) follows RQ MOD's loader, so that a file the game refuses is refused
