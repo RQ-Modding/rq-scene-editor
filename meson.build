@@ -33,11 +33,12 @@ scene_check = get_option('scene_check_lua')
 if scene_check == ''
     scene_check = meson.current_source_dir() / 'data/scene_check.lua'
 endif
+# The checker as an argument, not an input: inside RQ MOD it is the engine's file, outside this
+# subproject, which meson does not take as an input. The depfile builds it again when it changes.
 scene_check_c = custom_target('scene_check_lua',
-    input : scene_check,
     output : 'scene_check_lua.c',
     depfile : 'scene_check_lua.c.d',
-    command : [py, files('tools/embed.py'), '@INPUT@', '@OUTPUT@', 'scene_check_lua', '@DEPFILE@'])
+    command : [py, files('tools/embed.py'), scene_check, '@OUTPUT@', 'scene_check_lua', '@DEPFILE@'])
 
 executable('rq-scene-editor',
     ['src/main.c', 'src/look.c', 'src/json.c', 'src/doc.c', 'src/mods.c', 'src/ui.c',
