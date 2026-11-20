@@ -1,5 +1,7 @@
 # RQ Scene Editor
 
+![A line selected: the stage shows the speaker's face, the name plate and the page as the game lays them out, with the value given to {item}](pictures/line.png)
+
 A window for writing [RQ MOD](https://github.com/RQ-Modding/RQ-Mod)'s scene files for Rance Quest
 Magnum without Lua and without typing JSON by hand.
 
@@ -50,6 +52,20 @@ What it does:
 
 It is a fan project. AliceSoft and MangaGamer do not make or endorse it, and it contains nothing of
 their games: it reads the copy on your own computer.
+
+## Pictures
+
+Pick... on a line's speaker: the file's cast first, then the game's faces by character.
+
+![The face picker: the file's cast first, then the game's faces by character](pictures/picker.png)
+
+A choice's row selected: its text, comment, the condition that shows it, and the menu on the stage.
+
+![A choice's row selected, with its menu on the stage](pictures/choice.png)
+
+Cast and file: the cast, the values for Play, and the mod's functions the file calls.
+
+![The Cast and file tab: the cast, the values for Play, and the mod's functions](pictures/cast.png)
 
 ## Getting it
 
