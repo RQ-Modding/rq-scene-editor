@@ -267,7 +267,7 @@ rq-scene-editor --mixer-check [--game DIR]
   `frame` draws a frame before the actions after it, so a run can go through a scene; the shot
   waits a few frames after the last actions.
 - `--mixer-check` mixes Play from here's sounds without a sound device and checks them: two sounds
-  at once, a track's fade halfway, its loop, a sound's end.
+  at once, a Flash file's sound from memory, a track's fade halfway, its loop, a sound's end.
 - `--selftest` tries editing, undo, saving and changes on disk on FILE. FILE must be a copy: it is
   written.
 - A step's place is written as `steps[4]`, `steps[2].then[0]` or `steps[3].choice[1].steps[0]`;
@@ -299,7 +299,9 @@ fixed, install 3.2.0:
 
 The editor reads the game through [Rance Browser](https://github.com/RQ-Modding/rance-browser)'s
 readers, the static library `rance_core`, which comes with Dear ImGui (cimgui), SDL2 and libsys4. Both
-are submodules in `subprojects/`. Inside RQ MOD, meson shares one copy of each with the engine.
+are submodules in `subprojects/`. Inside RQ MOD, meson shares one copy of each with the engine. The
+same library plays Play from here's sounds (its mixer) and the world map's Flash tag (its Flash
+player, as RQ MOD's engine plays a Flash file).
 
 It checks a file with RQ MOD's own scene checker, a Lua file built into the program and run in Lua
 5.4 (`third_party/lua`, linked in). Inside RQ MOD, the engine passes its own `src/lua/scene_check.lua`

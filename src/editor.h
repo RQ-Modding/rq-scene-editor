@@ -177,16 +177,8 @@ bool media_can_play(int kind, int no);
 bool media_playing(int kind, int no);
 void media_play(int kind, int no);        /* plays, or stops when it is playing */
 void media_stop(void);
-/* Play from here: a sound beside the music (a jingle, a sound), and the music with a fade in ms
- * (-1: the game's, none). No sound for 0. */
-/* Play from here's sounds (mixer.c): several at once, the music as the game's SYS_PlayBGM plays it. */
-void mixer_sound(int no);
-void mixer_music(int no, int effect, int ms);   /* effect and ms -1: the game's defaults (at once) */
-int mixer_music_now(void);
-void mixer_stop(int fade_ms);
-double mixer_sound_ms(int no);                  /* a sound's length in ms, 0 when unknown */
-void mixer_shutdown(void);
-int mixer_check(void);                          /* --mixer-check: 0 when every check holds */
+/* Play from here's sounds are Rance Browser's mixer (core.h: mixer_sound, mixer_music, mixer_stop,
+ * mixer_check for --mixer-check): several at once, the music as the game's SYS_PlayBGM plays it. */
 
 /* ---- the stage (stage.c): the game's screen at a step, from the game's own pieces ---- */
 
@@ -311,7 +303,9 @@ void shake_mode(int part, int mode, float *sx, float *sy, float *ms);
  * the map came in. */
 void map_tag_paint(ImDrawList *dl, V2 o, float k, int x, int y, const char *name, double ms);
 /* A Flash file of the game's (by its name without a folder) at x, y of the 1024 by 768 screen, ms into its
- * loop; false when it is not there. */
+ * loop, played by Rance Browser's Flash player as the engine plays it, at the game's 30 frames a
+ * second; false when it is not there or the game would not play it. Once a frame for a file: its
+ * picture is drawn into one texture. */
 bool flash_draw(ImDrawList *dl, V2 o, float k, const char *base, float x, float y, double ms);
 void play_fixed_clock(double ms);       /* --shot: the clock held at ms after the start (-1: free) */
 

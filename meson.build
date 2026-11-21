@@ -11,7 +11,7 @@
 # with RQ MOD's own checker (scene_check.lua) in Lua 5.4 (third_party/lua): RQ MOD passes its own
 # copy with scene_check_lua; alone, the editor builds with data/scene_check.lua.
 project('rq-scene-editor', 'c', 'cpp',
-        version : '1.0.0',
+        version : '1.0.1',
         meson_version : '>= 0.59',
         default_options : ['c_std=c11', 'cpp_std=c++17', 'warning_level=1'])
 add_project_arguments('-D_DEFAULT_SOURCE', language : 'c')
@@ -42,7 +42,7 @@ scene_check_c = custom_target('scene_check_lua',
 
 editor_src = ['src/main.c', 'src/look.c', 'src/json.c', 'src/doc.c', 'src/mods.c', 'src/ui.c',
      'src/steps.c', 'src/win.c', 'src/check.c', 'src/media.c', 'src/stage.c', 'src/fields.c',
-     'src/fx.c', 'src/play.c', 'src/worldmap.c', 'src/flash.c', 'src/mixer.c', 'src/picker.c',
+     'src/fx.c', 'src/play.c', 'src/worldmap.c', 'src/flash.c', 'src/picker.c',
      'src/cond.c', 'src/problems.c', 'src/gamelog.c', 'src/pipe.c', 'src/game.c', scene_check_c]
 # The exe's icon (res/rq-scene-editor.ico, from res/rq-scene-editor.png).
 if host_machine.system() == 'windows'

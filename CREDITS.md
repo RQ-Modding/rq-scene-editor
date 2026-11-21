@@ -4,9 +4,8 @@ RQ Scene Editor is GPL-2.0-or-later (`COPYING`). It is built from these, each un
 
 | What | By | License | Where |
 | --- | --- | --- | --- |
-| [Rance Browser](https://github.com/RQ-Modding/rance-browser)'s readers, the `rance_core` library | RQ Modding | GPL-2.0-or-later | `subprojects/rance-browser` (submodule): the game folder, its archives, pictures, music and sounds, RQ MOD's names |
+| [Rance Browser](https://github.com/RQ-Modding/rance-browser)'s readers, the `rance_core` library | RQ Modding | GPL-2.0-or-later | `subprojects/rance-browser` (submodule): the game folder, its archives, pictures, music and sounds, RQ MOD's names, the mixer and the Flash player (after [xsystem4](https://github.com/nunuhara/xsystem4)'s, by kichikuou and Nunuhara Cabbage) that plays the world map's tag |
 | [xsystem4](https://github.com/nunuhara/xsystem4)'s transitions (RQ MOD's engine) | Nunuhara Cabbage | GPL-2.0-or-later | `src/fx_shaders.h` (its effects' shaders, copied) and `src/fx.c` (the effects it draws in C, written again as shaders of the same maths) |
-| xsystem4's Flash player | kichikuou (`parts/flash.c`), Nunuhara Cabbage (`parts/render.c`) | GPL-2.0-or-later | `src/flash.c`, a small player after them for the world map's tag |
 | [libsys4](https://github.com/nunuhara/libsys4) | Nunuhara Cabbage and contributors | GPL-2.0-or-later | `subprojects/libsys4` (submodule): the game's archives and picture formats, files with UTF-8 names |
 | RQ MOD's scene checker | RQ Modding | GPL-2.0-or-later | `data/scene_check.lua`, a copy of [RQ MOD](https://github.com/RQ-Modding/RQ-Mod)'s `src/lua/scene_check.lua` (inside RQ MOD the engine's own file is built in), run as the game runs it |
 | [Lua 5.4.7](https://www.lua.org/) | Lua.org, PUC-Rio | MIT | `third_party/lua` (unchanged, `README.md` there): runs the scene checker |

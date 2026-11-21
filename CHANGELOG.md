@@ -2,6 +2,18 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
+## 1.0.1 (not released)
+
+The world map's tag on Rance Browser's Flash player.
+
+- The world map's place tag is played by Rance Browser 1.1.0's Flash player, the one its Flash tab
+  plays a file with: at the game's 30 frames a second (the editor played it at the file's own 24,
+  slower than the game), drawn with OpenGL as RQ MOD's engine draws a Flash file (its colour changes
+  and blend modes too), and refused when the game would not play the file. The editor's own small
+  player is gone: `src/flash.c` only puts the player's frame on the stage.
+- Play from here's mixer is Rance Browser's (`rance_core`, where it moved), and `--mixer-check` also
+  plays a Flash file's sound from memory, twice at once.
+
 ## 1.0.0 (2026-11-20)
 
 The first release: in RQ MOD's package since 2.62.1 (`rq-scene-editor.exe` in the game's
