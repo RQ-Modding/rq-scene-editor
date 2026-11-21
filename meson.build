@@ -16,7 +16,10 @@ project('rq-scene-editor', 'c', 'cpp',
         default_options : ['c_std=c11', 'cpp_std=c++17', 'warning_level=1'])
 add_project_arguments('-D_DEFAULT_SOURCE', language : 'c')
 
-rance_core_dep = subproject('rance-browser').get_variable('rance_core_dep')
+# Rance Browser's 3D view (its option 3d) is a library apart that the editor does not take, so the
+# browser built beside it here has none: no cglm to fetch. Inside RQ MOD the engine's options for
+# Rance Browser come first.
+rance_core_dep = subproject('rance-browser', default_options : ['3d=disabled']).get_variable('rance_core_dep')
 
 c_warnings = ['-Wno-unused-parameter', '-Wno-sign-compare', '-Wno-missing-field-initializers',
               '-Wno-format-truncation']

@@ -301,7 +301,8 @@ The editor reads the game through [Rance Browser](https://github.com/RQ-Modding/
 readers, the static library `rance_core`, which comes with Dear ImGui (cimgui), SDL2 and libsys4. Both
 are submodules in `subprojects/`. Inside RQ MOD, meson shares one copy of each with the engine. The
 same library plays Play from here's sounds (its mixer) and the world map's Flash tag (its Flash
-player, as RQ MOD's engine plays a Flash file).
+player, as RQ MOD's engine plays a Flash file). Rance Browser's 3D view is a library apart that the
+editor does not take: it builds the browser with `3d=disabled`, so no cglm is fetched.
 
 It checks a file with RQ MOD's own scene checker, a Lua file built into the program and run in Lua
 5.4 (`third_party/lua`, linked in). Inside RQ MOD, the engine passes its own `src/lua/scene_check.lua`

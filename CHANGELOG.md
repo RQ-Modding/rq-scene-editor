@@ -13,6 +13,8 @@ The world map's tag on Rance Browser's Flash player.
   player is gone: `src/flash.c` only puts the player's frame on the stage.
 - Play from here's mixer is Rance Browser's (`rance_core`, where it moved), and `--mixer-check` also
   plays a Flash file's sound from memory, twice at once.
+- Built on Rance Browser 1.2.0 without its 3D view (the browser's option `3d=disabled`): the 3D view
+  is a library apart that the editor does not take, so its build fetches no cglm.
 
 ## 1.0.0 (2026-11-20)
 
