@@ -2,7 +2,7 @@
 
 Each version, newest first. A version in RQ MOD's package is named in RQ MOD's own CHANGELOG.
 
-## 1.0.1 (not released)
+## 1.0.1 (2026-11-22)
 
 The world map's tag on Rance Browser's Flash player.
 

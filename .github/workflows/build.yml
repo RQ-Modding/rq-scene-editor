@@ -94,8 +94,13 @@ jobs:
           # Lua's MIT notice is the comment at the end of lua.h.
           sed -n '/^\* Copyright (C) 1994/,/^\*\*\*\*/p' third_party/lua/lua.h > $pkg/licenses/lua/LICENSE
           cd $pkg && zip -r -9 ../RQSceneEditor-${{ steps.version.outputs.version }}-windows.zip . && cd ..
-          # The release's text: this version's section of CHANGELOG.md.
-          awk -v v="## ${{ steps.version.outputs.version }} " 'index($0, v) == 1 { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
+          # The release's text: every CHANGELOG section since the last release, from the
+          # repository's tags (a version never released on its own goes out with the next one).
+          v="${{ steps.version.outputs.version }}"
+          prev=$( { git ls-remote --tags --refs origin 'v*' | sed -n 's#.*refs/tags/v\([0-9][0-9.]*\)$#\1#p'; echo "$v"; } | sort -uV | awk -v v="$v" '$0 == v { print p; exit } { p = $0 }')
+          awk -v v="$v" -v prev="$prev" '/^## / { if (on && (prev == "" || $2 == prev)) exit; if ($2 == v) on = 1; if (on) print "## " $2; next } on' CHANGELOG.md |
+            # A release's page breaks the line wherever the file does: the wrapped lines joined.
+            awk '/^$/ { if (b != "") print b; b = ""; print; next } /^( *- |#)/ || b == "" { if (b != "") print b; b = $0; next } { sub(/^ +/, ""); b = b " " $0 } END { if (b != "") print b }' > notes.md
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
